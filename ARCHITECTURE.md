@@ -40,17 +40,24 @@ app/                        Next.js App Router (JavaScript only, no src/)
                             progress, attempts, retry + safe cancel actions
   settings                  Profile, My Capabilities (what you build & how you
                             price), service catalog, provider configuration
-  admin                     Superadmin control room (is_superadmin-gated at the
-                            layout + every api/admin route; own nav in AdminShell)
+  admin                     Platform control room (admin_users identity +
+                            oos_admin_session gate at the layout + every api/admin
+                            route; own login at /admin/login; own nav in AdminShell)
     page.js                 Control room overview
-    accounts                Workspace control room (suspend/reactivate, plan, usage)
+    accounts                Workspace control room (suspend/reactivate, plan,
+                            delete/purge, usage)
+    plans                   Billing plan CRUD (price, currency, active, limits)
+    api-keys                Hashed platform API keys (webhook auth), revoke
+    customer-care           Customer reach-out queue records
     system                  Platform health: DB, worker, job queue, providers
     scoring                 Platform score-threshold defaults + override map
     usage                   Usage vs plan limits across every tenant
     audit                   Append-only audit_logs trail, filterable
   api/…                     Server-side API routes (Route Handlers)
-    admin/…                 Superadmin-only endpoints (each requireSuperadmin())
-      overview/ accounts/ accounts/[id]/ (status/ plan/) system/ scoring/ usage/ audit/
+    admin/…                 Admin-only endpoints (each requireSuperadmin())
+      overview/ accounts/ accounts/[id]/ (status/ plan/ DELETE purge)
+      plans/ plans/[code]/ api-keys/ api-keys/[id]/ customer-care/ customer-care/[id]/
+      system/ scoring/ usage/ audit/ login/ logout/
     pipeline/                 GET: kanban data + metrics; POST activity: add notes
     settings/capabilities/    GET/PATCH: the user's own business capability profile
 
@@ -80,8 +87,14 @@ components/                 Shared UI (layout shell, cards, badges, forms)
                              pricing range, preferred targets & client size
   MyCapabilities.js          Read-only summary card: "I can build: …" + profile chips
 lib/
-  db.js                     mysql2 pool + query helper (single place for SQL access)
-  auth.js                   Session cookie auth (scrypt password hashing)
+  db.js                     mysql2/pg pool + query helper (single place for SQL access)
+  auth.js                   Tenant session cookie auth (scrypt password hashing)
+  admin-auth.js             Platform admin identity + oos_admin_session cookie
+  accounts/                 Account-scoped mgmt used by the control room
+    api-keys.js             Hashed API keys (issue/revoke/lookup by hash)
+    customer-care.js        customer_care_contacts repository
+    purge.js                Transactional workspace purge (keeps audit trail)
+  audit.js                  Append-only audit trail (user_id / admin_user_id)
   validation.js             Small hand-rolled validators (no external deps)
   repositories/             One module per entity — the ONLY layer that writes SQL
     users.js businesses.js contacts.js evidence.js opportunities.js
@@ -171,7 +184,8 @@ db/
   migrations/               Versioned SQL migrations (001_init.sql … 027_platform_settings.sql)
 scripts/
   migrate.js                Transactional migration runner (schema_migrations tracking)
-  setup-db.js               migrate + seed (solution library, demo data, admin user)
+  setup-db.js               migrate + seed (solution library, demo data, admin
+                            users + admin login)
 ```
 
 ### Data flow (the "Opportunity" lifecycle)
@@ -277,23 +291,29 @@ user_capabilities, owner_profiles. Design points:
 
 See `db/schema.sql`.
 
-### Superadmin control room
+### Platform admin control room
 
-A platform-wide surface at `/admin/*`, reachable only when `users.is_superadmin`
-is set (migration `026_superadmin.sql`). `requireSuperadmin()` (in
-`lib/api-helpers.js`) re-checks the flag from the DB on every admin page and
+A platform-wide surface at `/admin/*`, gated by its **own identity** — `admin_users`
+(migration `028_admin_users.sql`) with the separate `oos_admin_session` cookie, set
+only by `/admin/login`. The legacy `users.is_superadmin` flag is deliberately NOT
+honored. `requireSuperadmin()` (in `lib/api-helpers.js`, backed by
+`lib/admin-auth.js`) re-checks the identity from the DB on every admin page and
 every `/api/admin/*` route — a stale cookie or a stale role is not enough; it is
 never grantable through any account-management API. Admin routes are NOT
 rate-limited like auth (login/registration are, to prevent brute force) and are
-independently CSRF-protected (mutating admin routes pass the standard
-`request.method` proxy check). Surfaces: overview, accounts (suspend/reactivate +
-plan changes, audited), system health (DB/worker/jobs/providers), scoring
-thresholds (platform defaults in `platform_settings`, migration `027`), usage vs
-plan limits, and the audit log. The audit log reads the append-only `audit_logs`
-table written by `lib/audit.js::audit()` — every superadmin mutation writes an
-action (`admin.account_suspended`, `admin.scoring_defaults_updated`, …) with
-`user_id` and `account_id` set, and the UI's reported counts match the table
-exactly (asserted by e2e PDFMSE17–28).
+independently CSRF-protected (mutating admin routes echo `oos_admin_csrf` via the
+standard `request.method` proxy check). Surfaces: overview, accounts
+(suspend/reactivate, plan changes, permanent purge — all audited), billing plan
+CRUD (`billing_plans`, migration `029`), API keys (`api_keys`, migration `030`,
+hash-stored, shown once, used by the ingest webhook via `X-Opportunityos-Api-Key`),
+customer care (`customer_care_contacts`, migration `030`), system health
+(DB/worker/jobs/providers), scoring thresholds (platform defaults in
+`platform_settings`, migration `027`), usage vs plan limits, and the audit log.
+The audit log reads the append-only `audit_logs` table written by
+`lib/audit.js::audit()` — every admin mutation writes an action
+(`admin.account_suspended`, `admin.scoring_defaults_updated`, `admin.account_deleted`,
+…) attributed to `admin_user_id` (with `account_id` set), and the UI's reported
+counts match the table exactly (asserted by e2e PDFMSE17–28).
 
 ## 3. Environment variables
 

@@ -4,26 +4,30 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import '@/lib/csrf-client'; // side-effect: X-CSRF-Token on mutating fetches (control room mutations)
 
-// The superadmin control room has its OWN navigation — it is deliberately
-// NOT linked from components/AppShell (normal user nav). You only get here by
-// typing /admin/*; the layout + every admin API route enforce is_superadmin
-// server-side, so a non-superadmin can never render this shell.
+// The platform control room has its OWN navigation — it is deliberately NOT
+// linked from components/AppShell (normal user nav). You only get here by
+// signing in at /admin/login (or typing /admin/*): the layout + every admin
+// API route enforce the separate administrator identity (admin_users +
+// oos_admin_session) server-side, so a tenant user can never render this.
 const ADMIN_NAV = [
   { href: '/admin', label: 'Control room', status: 'ready' },
   { href: '/admin/accounts', label: 'Accounts', status: 'ready' },
+  { href: '/admin/plans', label: 'Billing plans', status: 'ready' },
+  { href: '/admin/usage', label: 'Usage & cost', status: 'ready' },
+  { href: '/admin/api-keys', label: 'API keys', status: 'ready' },
+  { href: '/admin/customer-care', label: 'Customer care', status: 'ready' },
   { href: '/admin/system', label: 'System health', status: 'ready' },
   { href: '/admin/scoring', label: 'Scoring thresholds', status: 'ready' },
-  { href: '/admin/usage', label: 'Usage & cost', status: 'ready' },
   { href: '/admin/audit', label: 'Audit log', status: 'ready' },
 ];
 
-export default function AdminShell({ user, children }) {
+export default function AdminShell({ admin, children }) {
   const pathname = usePathname();
   const router = useRouter();
 
   async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
+    await fetch('/api/admin/logout', { method: 'POST' });
+    router.push('/admin/login');
     router.refresh();
   }
 
@@ -40,7 +44,7 @@ export default function AdminShell({ user, children }) {
               Control room
             </span>
           </p>
-          <p className="mt-1 text-xs text-gray-500">Superadmin only</p>
+          <p className="mt-1 text-xs text-gray-500">Whole-system administrators</p>
         </div>
         <nav className="space-y-1 px-3">
           {ADMIN_NAV.map((item) =>
@@ -66,10 +70,10 @@ export default function AdminShell({ user, children }) {
           )}
         </nav>
         <div className="mt-8 border-t border-gray-200 px-5 py-4">
-          <p className="truncate text-sm font-medium text-gray-900">{user.name}</p>
-          <p className="truncate text-xs text-gray-500">{user.email}</p>
+          <p className="truncate text-sm font-medium text-gray-900">{admin.name}</p>
+          <p className="truncate text-xs text-gray-500">{admin.email}</p>
           <span className="mt-1 inline-block rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700">
-            {user.role} · superadmin
+            platform admin
           </span>
           <button onClick={logout} className="mt-3 block text-xs font-medium text-red-600 hover:text-red-700">
             Sign out

@@ -33,8 +33,15 @@ db/migrations/
   023_searchqueries_maturity_width.sql Widen business_maturity to fit 'established'
   024_backfill_pipeline_probability.sql Backfill probability for auto-advanced opportunities
   025_two_factor.sql           TOTP two-factor authentication
-  026_superadmin.sql           users.is_superadmin flag (platform control-room gate)
-  027_platform_settings.sql    Platform-default settings key/value (scoring defaults)
+026_superadmin.sql           users.is_superadmin flag (LEGACY control-room gate —
+                               retained for parity; superseded by 028 admin_users)
+   027_platform_settings.sql    Platform-default settings key/value (scoring defaults)
+   028_admin_users.sql          admin_users + admin_sessions + audit_logs.admin_user_id
+                               (separate platform-admin identity, decoupled from tenants)
+   029_billing_plans_crud.sql   billing_plans price_cents/currency/is_active; drop the
+                               hard-coded chk_accounts_plan CHECK, FK from accounts instead
+   030_api_keys_and_customer_care.sql api_keys (hashed platform API keys) + 
+                               customer_care_contacts (reach-out queue)
 scripts/migrate.js           migration runner (transactional per file)
 scripts/setup-db.js          migrate + seed admin user (scrypt hash)
 app/api/system/self-test     admin-only repository test suite (41 assertions)
@@ -44,13 +51,14 @@ Run: `node scripts/setup-db.js` (or `node scripts/migrate.js` for migrations onl
 
 ## Tables
 
-users · sessions · businesses · business_sources · business_contacts ·
-business_evidence · solutions · solution_problems · solution_industries ·
-opportunities · opportunity_evidence · opportunity_assumptions · financial_scenarios ·
-opportunity_solutions · outreach_messages · pipeline_events · activity_log ·
-search_queries · search_jobs · background_jobs · ai_jobs · audit_logs ·
-user_capabilities · owner_profiles · accounts · billing_plans · account_usage ·
-app_settings · platform_settings · discover_schedules
+users · sessions · admin_users · admin_sessions · businesses · business_sources ·
+business_contacts · business_evidence · solutions · solution_problems ·
+solution_industries · opportunities · opportunity_evidence ·
+opportunity_assumptions · financial_scenarios · opportunity_solutions ·
+outreach_messages · pipeline_events · activity_log · search_queries ·
+search_jobs · background_jobs · ai_jobs · audit_logs · user_capabilities ·
+owner_profiles · accounts · billing_plans · account_usage · app_settings ·
+platform_settings · api_keys · customer_care_contacts · discover_schedules
 
 ## Design decisions worth knowing
 

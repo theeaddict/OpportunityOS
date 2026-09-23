@@ -8,15 +8,13 @@ import { listAccounts } from '@/lib/repositories/accounts';
 // client hitting the endpoint directly can't bypass the page gate.
 export async function GET() {
   try {
-    const user = await requireSuperadmin();
+    const admin = await requireSuperadmin();
     const accounts = await listAccounts();
     return jsonOk({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        is_superadmin: user.is_superadmin,
+      admin: {
+        id: admin.id,
+        email: admin.email,
+        name: admin.name,
       },
       system: {
         accounts: accounts.length,

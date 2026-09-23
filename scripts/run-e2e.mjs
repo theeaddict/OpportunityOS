@@ -140,8 +140,10 @@ async function waitForApp(attempts = 180, intervalMs = 1000) {
 // 404 for a route that is still compiling on its first hit).
 async function warmAdminRoutes() {
   const routes = [
-    '/admin', '/admin/accounts', '/admin/system', '/admin/scoring', '/admin/usage', '/admin/audit',
-    '/api/admin/overview', '/api/admin/accounts', '/api/admin/system', '/api/admin/scoring',
+    '/admin', '/admin/login', '/admin/accounts', '/admin/plans', '/admin/api-keys',
+    '/admin/customer-care', '/admin/system', '/admin/scoring', '/admin/usage', '/admin/audit',
+    '/api/admin/overview', '/api/admin/accounts', '/api/admin/plans', '/api/admin/api-keys',
+    '/api/admin/customer-care', '/api/admin/system', '/api/admin/scoring',
     '/api/admin/usage', '/api/admin/audit',
   ];
   for (const route of routes) {

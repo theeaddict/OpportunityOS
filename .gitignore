@@ -40,3 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .next-e2e
+
+# e2e harness build/dist output
+/tmp/

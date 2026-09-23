@@ -32,8 +32,7 @@ export async function PUT(request) {
     );
     await audit('admin.scoring_defaults_updated', {
       entity_type: 'platform',
-      user_id: user.id,
-      account_id: user.account_id ?? null,
+      admin_user_id: user.id,
       metadata: { from: before, to: score_thresholds },
     });
     return jsonOk({ score_thresholds });

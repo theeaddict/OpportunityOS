@@ -5,6 +5,7 @@ import { enqueue } from '@/lib/jobs/queue';
 import { audit } from '@/lib/audit';
 import { enforce } from '@/lib/rate-limit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
+import { findAccountByApiKey } from '@/lib/accounts/api-keys';
 
 const TOKEN = process.env.OPPORTUNITYOS_INGEST_TOKEN || null;
 const INGEST_ACCOUNT_RAW = process.env.OPPORTUNITYOS_INGEST_ACCOUNT_ID || '';
@@ -13,12 +14,20 @@ if (TOKEN && (!INGEST_ACCOUNT_RAW || !Number.isInteger(INGEST_ACCOUNT_ID) || ING
   throw new Error('OPPORTUNITYOS_INGEST_TOKEN is set but OPPORTUNITYOS_INGEST_ACCOUNT_ID is missing or invalid');
 }
 
-function accountFromToken(request) {
-  if (!TOKEN) return null;
+async function accountFromAuth(request) {
+  // Platform-issued API key (control room) takes precedence.
+  const api = request.headers.get('x-opportunityos-api-key') || request.headers.get('x-api-key');
+  if (api) {
+    const found = await findAccountByApiKey(api);
+    if (found) return { account_id: found.account_id, client: 'api_key', name: found.name };
+    return { client: 'api_key', invalid: true };
+  }
+  // Legacy operator token (scoped to exactly one account; never trust client headers).
   const auth = request.headers.get('x-opportunityos-token');
-  if (!auth || auth !== TOKEN) return null;
-  // The token is scoped to exactly one account; never trust the client header.
-  return INGEST_ACCOUNT_ID;
+  if (auth && TOKEN && auth === TOKEN) {
+    return { account_id: INGEST_ACCOUNT_ID, client: 'token' };
+  }
+  return null;
 }
 
 /**
@@ -37,11 +46,14 @@ function accountFromToken(request) {
  */
 export async function POST(request) {
   try {
-    const tokenAccountId = accountFromToken(request);
-    const user = tokenAccountId != null ? null : await requireAccount();
-    const accountId = tokenAccountId ?? user.account_id;
-    if (tokenAccountId != null) {
-      const acct = await getAccount(tokenAccountId);
+    const auth = await accountFromAuth(request);
+    if (auth?.invalid) {
+      return Response.json({ ok: false, error: 'Invalid API key' }, { status: 401 });
+    }
+    const user = auth ? null : await requireAccount();
+    const accountId = auth ? auth.account_id : user.account_id;
+    if (auth && auth.client !== 'session') {
+      const acct = await getAccount(auth.account_id);
       if (!acct) return Response.json({ ok: false, error: 'Unknown account' }, { status: 401 });
       if (acct.status !== 'active') {
         return Response.json({ ok: false, error: 'Account suspended' }, { status: 403 });
@@ -87,7 +99,13 @@ export async function POST(request) {
     }
 
     await audit('leads.ingested', {
-      metadata: { ingested: outcomes.length, created: created.length, updated: updated.length },
+      metadata: {
+        ingested: outcomes.length,
+        created: created.length,
+        updated: updated.length,
+        client: auth?.client || 'session',
+        client_name: auth?.name || null,
+      },
       user_id: (user && user.id) ?? null,
       account_id: accountId,
     });

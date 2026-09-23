@@ -29,7 +29,7 @@ export async function PATCH(request, { params }) {
     await audit('admin.account_plan_changed', {
       entity_type: 'account',
       entity_id: accountId,
-      user_id: user.id,
+      admin_user_id: user.id,
       account_id: accountId,
       metadata: { name: account.name, from: account.plan_code, to: plan_code },
     });

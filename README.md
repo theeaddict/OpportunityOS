@@ -33,7 +33,9 @@ node scripts/setup-db.js
 npm run dev               # http://localhost:3000
 ```
 
-Default login after seeding: `admin@example.com` / `opportunityos` — change it.
+Default login after seeding: tenant `admin@example.com` / `opportunityos`, and the
+platform admin (control room) is `admin@example.com` / `opportunityos` via
+`/admin/login` — change both.
 
 ## Core workflow
 
@@ -144,19 +146,29 @@ Business-impact and delivery-value figures are clearly-labeled estimates from yo
 assumptions and the solution library (currencies are surfaced per the dominant currency),
 never quoted as facts.
 
-## Superadmin control room
+## Platform admin control room
 
-`/admin/*` is a platform-wide control room, reachable **only** by users whose
-`users.is_superadmin` flag is set (live-checked via `requireSuperadmin()` on every
-admin page and `api/admin` route; it is never grantable through any
-account-management API). It has its own nav (`components/AdminShell`) — it is not
-linked from the normal `AppShell`, and a non-superadmin is forced to `/login` /
-`forbidden()` before anything renders.
+`/admin/*` is a platform-wide control room for the **whole system**, decoupled from
+tenant accounts. It is gated by a separate identity (`admin_users` + the
+`oos_admin_session` cookie) with its own login at `/admin/login`; it never reuses
+tenant logins, and the legacy `users.is_superadmin` flag is NOT honored — only an
+`admin_users` row plus this session unlock it. `requireSuperadmin()` live-checks
+every admin page and `/api/admin/*` route; access is never grantable through any
+account-management API. It has its own nav (`components/AdminShell`) — it is not
+linked from the normal `AppShell`, and a non-admin is redirected to `/admin/login`.
 
 - **Control room** (`/admin`) — system overview (gate test is PDFMSE17/18).
 - **Accounts** (`/admin/accounts`) — every workspace across every tenant with plan,
-  status, members and usage; superadmin can suspend/reactivate and change plans —
-  all audited (`admin.account_suspended`, `admin.account_plan_changed`…).
+  status, members and usage; the admin can suspend/reactivate, change plans, and
+  **delete** a workspace permanently (transactional purge, audit retained) — all
+  audited (`admin.account_suspended`, `admin.account_plan_changed`,
+  `admin.account_deleted`…).
+- **Billing plans** (`/admin/plans`) — CRUD for `billing_plans` (price, currency,
+  active flag, per-plan limits). `internal`/`free` are protected; a plan in use
+  cannot be deleted (PDFMSE via plans CRUD e2e).
+- **API keys** (`/admin/api-keys`) — issue/revoke hashed platform API keys, shown
+  once, used by the ingest webhook (`X-Opportunityos-Api-Key`) (PDFMSE14).
+- **Customer care** (`/admin/customer-care`) — reach-out queue records per account.
 - **System health** (`/admin/system`) — DB ping/latency, background worker liveness,
   job queue counts by status (matched exactly to `background_jobs`), stale running
   jobs, provider configuration (PDFMSE21/22).
@@ -173,9 +185,9 @@ linked from the normal `AppShell`, and a non-superadmin is forced to `/login` /
   filterable by action and entity type, with actor/entity/account/summary per row
   (PDFMSE27/28).
 
-All six control-room surfaces have e2e coverage (PDFMSE17–28) asserting the
-superadmin-only gate (anonymous 401, non-superadmin 403, page never renders) and
-that reported data matches the underlying tables exactly.
+All control-room surfaces have e2e coverage (PDFMSE17–28) asserting the
+superadmin-only gate (anonymous/tenant 401, admin-only 200, page never renders for
+non-admins) and that reported data matches the underlying tables exactly.
 
 ## Guarantees built into the product
 

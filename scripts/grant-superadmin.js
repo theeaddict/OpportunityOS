@@ -1,6 +1,12 @@
-// grant-superadmin.js — one-time seed: marks a user as a platform
-// superadmin. This is the ONLY supported way to grant the role besides
-// editing the DB directly; it is never reachable from the application.
+// grant-superadmin.js — DEPRECATED. Marks a user in `users` as
+// `is_superadmin`, the legacy (migration 026) control-room gate. Since the
+// whole-system control room moved to the separate `admin_users` identity
+// (migration 028) in STAGE 7, `users.is_superadmin` is no longer honored by
+// `/admin/*` or `/api/admin/*`. Use `node scripts/grant-admin.js <email>` to
+// grant/update a platform administrator instead.
+//
+// Kept only for plan parity with the old flag; it no longer unlocks the
+// control room.
 //
 // Usage: node scripts/grant-superadmin.js <email-or-id>
 // Idempotent: safe to re-run.
@@ -8,6 +14,9 @@ require('dotenv').config();
 const { Client } = require('pg');
 
 async function main() {
+  console.warn(
+    '[deprecated] grant-superadmin.js sets the legacy is_superadmin flag, which the control room no longer honors. Use `node scripts/grant-admin.js <email>` instead.'
+  );
   const target = process.argv[2];
   if (!target) {
     console.error('Usage: node scripts/grant-superadmin.js <email-or-id>');

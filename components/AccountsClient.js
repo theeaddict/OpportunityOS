@@ -115,6 +115,33 @@ export default function AccountsClient() {
     }
   }
 
+  async function deleteAccount(account) {
+    const ok = window.confirm(
+      `Permanently delete "${account.name}" (#${account.id}) and ALL of its data?\n\n` +
+        'This cannot be undone. The audit trail is kept.'
+    );
+    if (!ok) return;
+    setBusyId(account.id);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/admin/accounts/${account.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || 'Request failed');
+      if (expandedId === account.id) toggleDetail(account.id);
+      setData((prev) =>
+        prev ? { ...prev, accounts: prev.accounts.filter((a) => a.id !== account.id) } : prev
+      );
+    } catch (e) {
+      setActionError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function toggleDetail(id) {
     if (expandedId === id) {
       setExpandedId(null);
@@ -212,6 +239,14 @@ export default function AccountsClient() {
                         }`}
                       >
                         {busy ? '…' : suspended ? 'Reactivate' : 'Suspend'}
+                      </button>
+                      <button
+                        onClick={() => deleteAccount(a)}
+                        disabled={busy}
+                        className="ml-2 rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                        aria-label={`Delete ${a.name}`}
+                      >
+                        {busy ? '…' : 'Delete'}
                       </button>
                     </td>
                   </tr>

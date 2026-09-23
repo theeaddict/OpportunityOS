@@ -38,7 +38,17 @@ async function main() {
      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 'active', is_superadmin = TRUE`,
     [hashPassword(defaultPassword)]
   );
-  console.log(`Admin login: admin@example.com / ${defaultPassword} (change it after first login)`);
+  // The platform administrator is a SEPARATE identity (admin_users) with its
+  // own sign-in at /admin/login — seeding it alongside the tenant bootstrap
+  // user keeps both surfaces ready with the same default credentials.
+  await conn.query(
+    `INSERT INTO admin_users (name, email, password_hash)
+     VALUES ('Administrator', 'admin@example.com', $1)
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = TRUE`,
+    [hashPassword(defaultPassword)]
+  );
+  console.log(`Admin login (tenant): admin@example.com / ${defaultPassword}`);
+  console.log(`Admin login (control room): admin@example.com / ${defaultPassword} (URL /admin/login)`);
   await conn.end();
 }
 

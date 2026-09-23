@@ -16,7 +16,10 @@ export default function AuthForm({ mode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    return res.json();
+    // The server can return a non-JSON body (e.g. Next.js's HTML 404 while a
+    // route is still compiling on a fresh dev boot). Never crash on it.
+    const data = await res.json().catch(() => null);
+    return data || { ok: false, error: `Server returned ${res.status}. Please try again.` };
   }
 
   async function onSubmit(e) {

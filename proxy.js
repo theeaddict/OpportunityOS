@@ -26,8 +26,10 @@ import { NextResponse } from 'next/server';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SESSION_COOKIE = 'oos_session';
 const CSRF_COOKIE = 'oos_csrf';
+const ADMIN_SESSION_COOKIE = 'oos_admin_session';
+const ADMIN_CSRF_COOKIE = 'oos_admin_csrf';
 const CSRF_HEADER = 'x-csrf-token';
-const EXEMPT_PATHS = new Set(['/api/leads/webhook', '/api/auth/login', '/api/auth/register']);
+const EXEMPT_PATHS = new Set(['/api/leads/webhook', '/api/auth/login', '/api/auth/register', '/api/admin/login']);
 
 export function proxy(request) {
   const { pathname } = request.nextUrl;
@@ -35,8 +37,14 @@ export function proxy(request) {
   if (!MUTATING.has(method)) return NextResponse.next();
   if (EXEMPT_PATHS.has(pathname)) return NextResponse.next();
 
+  // Which cookie pair applies: an admin session (oos_admin_session + its own
+  // csrf) is screened the same way as a tenant user session (oos_session).
+  const isAdmin = Boolean(request.cookies.get(ADMIN_SESSION_COOKIE));
+  const sessionCookie = isAdmin ? ADMIN_SESSION_COOKIE : SESSION_COOKIE;
+  const csrfCookieName = isAdmin ? ADMIN_CSRF_COOKIE : CSRF_COOKIE;
+
   // No session cookie → nothing to CSRF (no ambient browser session).
-  if (!request.cookies.get(SESSION_COOKIE)) return NextResponse.next();
+  if (!request.cookies.get(sessionCookie)) return NextResponse.next();
 
   const site = request.headers.get('sec-fetch-site');
   if (site === 'cross-site') {
@@ -58,7 +66,7 @@ export function proxy(request) {
   }
 
   // Double-submit cookie check (BiasharaOS CSRFMiddleware parity).
-  const csrfCookie = request.cookies.get(CSRF_COOKIE)?.value || '';
+  const csrfCookie = request.cookies.get(csrfCookieName)?.value || '';
   const header = request.headers.get(CSRF_HEADER) || '';
   if (csrfCookie.length === 0 || header.length === 0 || header !== csrfCookie) {
     return NextResponse.json({ ok: false, error: 'Invalid CSRF token' }, { status: 403 });

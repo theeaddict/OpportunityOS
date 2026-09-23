@@ -66,7 +66,11 @@ function cookieFrom(res) {
 }
 
 function csrfFrom(cookie) {
-  const m = String(cookie || '').match(/(?:^|;\s*)oos_csrf=([^;]+)/);
+  // Admin sessions pair oos_admin_session with oos_admin_csrf; tenant sessions
+  // pair oos_session with oos_csrf. The proxy screens whichever pair is present.
+  const isAdmin = /(?:^|;\s*)oos_admin_session=/.test(String(cookie || ''));
+  const name = isAdmin ? 'oos_admin_csrf' : 'oos_csrf';
+  const m = String(cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return m ? m[1] : null;
 }
 
@@ -1222,7 +1226,7 @@ test('PDFMSE16 suspended users are blocked on requireUser-only routes', { timeou
 // Superadmin control room — stage 1 access control
 // ---------------------------------------------------------------------------
 
-test('PDFMSE17 superadmin control room is gated for everyone except the is_superadmin flag', { timeout: 60000 }, async () => {
+test('PDFMSE17 admin control room is gated for everyone except the admin_users identity', { timeout: 60000 }, async () => {
   // Unsigned → 401 at the API layer; the page never renders.
   const anon = new Agent();
   const anonApi = await anon.req('GET', '/api/admin/overview');
@@ -1230,36 +1234,49 @@ test('PDFMSE17 superadmin control room is gated for everyone except the is_super
   const anonPage = await fetch(`${BASE}/admin`, { method: 'GET', redirect: 'manual' });
   assert.ok(![200].includes(anonPage.status), `unsigned /admin must never render (got ${anonPage.status})`);
 
-  // A freshly registered user (owner of their own workspace) → 403, on both
-  // the API and the page, and register must never mint the flag.
+  // A freshly registered user (owner of their own workspace) → 401 with the
+  // separate-admin error, on both the API and the page. Register must never
+  // mint an admin identity.
   const norm = new Agent();
   const reg = await norm.req('POST', '/api/auth/register', {
     name: 'Normal Owner', email: EMAIL_NORM, password: PASSWORD,
   });
   assert.equal(reg.status, 200, JSON.stringify(reg.data));
   const normApi = await norm.req('GET', '/api/admin/overview');
-  assert.equal(normApi.status, 403, `non-superadmin must be 403 on the admin API: ${JSON.stringify(normApi.data)}`);
-  assert.match(String(normApi.data?.error || ''), /superadmin/i);
-  const [nrows] = await pool.execute('SELECT is_superadmin FROM users WHERE email = ?', [EMAIL_NORM]);
-  assert.ok(!nrows[0].is_superadmin, 'register must never grant superadmin');
+  assert.equal(normApi.status, 401, `tenant-only session must be 401 on the admin API: ${JSON.stringify(normApi.data)}`);
+  assert.match(String(normApi.data?.error || ''), /administrator/i);
+  const [nrows] = await pool.execute('SELECT COUNT(*) AS n FROM admin_users WHERE email = ?', [EMAIL_NORM]);
+  assert.equal(Number(nrows[0].n), 0, 'register must never create an admin_users row');
+  const [ncols] = await pool.execute('SELECT is_superadmin FROM users WHERE email = ?', [EMAIL_NORM]);
+  assert.ok(!ncols[0].is_superadmin, 'register must never grant tenant superadmin either');
   const normPage = await fetch(`${BASE}/admin`, { method: 'GET', redirect: 'manual' });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin must never render (got ${normPage.status})`);
 
-  // The seeded bootstrap admin (is_superadmin via setup-db seed) → 200 with
-  // system-wide (non-account-scoped) data.
+  // The seeded admin (admin_users via setup-db seed, separate login at
+  // /admin/login) → 200 with system-wide (non-account-scoped) data.
   const admin = new Agent();
-  const login = await admin.req('POST', '/api/auth/login', {
+  const login = await admin.req('POST', '/api/admin/login', {
     email: 'admin@example.com', password: 'opportunityos',
   });
   assert.equal(login.status, 200, JSON.stringify(login.data));
   const api = await admin.req('GET', '/api/admin/overview');
   assert.equal(api.status, 200, JSON.stringify(api.data));
-  assert.equal(api.data.user.is_superadmin, true, 'overview must echo the superadmin flag');
+  assert.equal(api.data.admin.email, 'admin@example.com', 'overview must echo the signed-in admin identity');
   assert.ok(Number(api.data.system.accounts) >= 1, 'overview must expose a system-wide (cross-tenant) account count');
   const page = await fetch(`${BASE}/admin`, { method: 'GET', redirect: 'manual', headers: { Cookie: admin.cookie } });
-  assert.equal(page.status, 200, 'superadmin must render the control room page');
+  assert.equal(page.status, 200, 'admin must render the control room page');
   const html = await page.text();
-  assert.match(html, /Control room/, 'control room shell must render for superadmin');
+  assert.match(html, /Control room/, 'control room shell must render for the admin');
+
+  // A tenant session must NEVER satisfy an admin page, even for the seeded
+  // bootstrap account — the admin identity is separate (admin_users).
+  const tenant = new Agent();
+  const tLogin = await tenant.req('POST', '/api/auth/login', {
+    email: 'admin@example.com', password: 'opportunityos',
+  });
+  assert.equal(tLogin.status, 200, JSON.stringify(tLogin.data));
+  const tenantPage = await fetch(`${BASE}/admin`, { method: 'GET', redirect: 'manual', headers: { Cookie: tenant.cookie } });
+  assert.ok(![200].includes(tenantPage.status), `a tenant login of the same email must NOT render /admin (got ${tenantPage.status})`);
 
   // Stash both sessions for the STAGE 2 (accounts) tests as module cookies —
   // re-logging in later would burn the global /api/auth/login rate limiter.
@@ -1267,14 +1284,17 @@ test('PDFMSE17 superadmin control room is gated for everyone except the is_super
   globalThis.normSession = norm.cookie;
 });
 
-test('PDFMSE18 is_superadmin is not grantable through any account-management API', { timeout: 60000 }, async () => {
-  const admin = new Agent();
-  const login = await admin.req('POST', '/api/auth/login', {
+test('PDFMSE18 platform-admin identity is not grantable through any account-management API', { timeout: 60000 }, async () => {
+  // An OWNER of a workspace attempts every tenant-side path that could be
+  // abused; none of them may mint a platform-admin identity (admin_users).
+  const owner = new Agent();
+  const login = await owner.req('POST', '/api/auth/login', {
     email: 'admin@example.com', password: 'opportunityos',
   });
   assert.equal(login.status, 200, JSON.stringify(login.data));
 
-  // A client smuggling is_superadmin in the register payload must not gain it.
+  // A client smuggling is_superadmin in the register payload must not gain any
+  // admin identity (neither the legacy users flag nor an admin_users row).
   const sneaky = new Agent();
   const reg = await sneaky.req('POST', '/api/auth/register', {
     name: 'Sneaky', email: EMAIL_SNEAKY, password: PASSWORD, is_superadmin: true,
@@ -1282,19 +1302,23 @@ test('PDFMSE18 is_superadmin is not grantable through any account-management API
   assert.equal(reg.status, 200, JSON.stringify(reg.data));
   let [srows] = await pool.execute('SELECT is_superadmin FROM users WHERE email = ?', [EMAIL_SNEAKY]);
   assert.ok(!srows[0].is_superadmin, 'register must ignore a smuggled is_superadmin');
+  let [asrows] = await pool.execute('SELECT COUNT(*) AS n FROM admin_users WHERE email = ?', [EMAIL_SNEAKY]);
+  assert.equal(Number(asrows[0].n), 0, 'register must never create an admin_users row');
 
   // The members API must refuse "superadmin" as an assignable role.
   const memberEmail = `e2e-sa-member-${stamp}@example.test`;
-  const create = await admin.req('POST', '/api/account', {
+  const create = await owner.req('POST', '/api/account', {
     name: 'Member', email: memberEmail, password: PASSWORD, role: 'member',
   });
   assert.equal(create.status, 200, JSON.stringify(create.data));
   const [mrows] = await pool.execute('SELECT id FROM users WHERE email = ?', [memberEmail]);
   const memberId = mrows[0].id;
-  const promote = await admin.req('PATCH', `/api/account/members/${memberId}`, { role: 'superadmin' });
+  const promote = await owner.req('PATCH', `/api/account/members/${memberId}`, { role: 'superadmin' });
   assert.equal(promote.status, 400, `members API must reject the superadmin role: ${JSON.stringify(promote.data)}`);
   const [m2] = await pool.execute('SELECT is_superadmin FROM users WHERE id = ?', [memberId]);
   assert.ok(!m2[0].is_superadmin, 'member must remain a plain user after a rejected promotion');
+  const [masrows] = await pool.execute('SELECT COUNT(*) AS n FROM admin_users WHERE id = ?', [memberId]);
+  assert.equal(Number(masrows[0].n), 0, 'a tenant member id must never appear in admin_users');
 });
 test('PDFMSE19 accounts control room is superadmin-gated and system-wide', { timeout: 60000 }, async () => {
   // Reuse the sessions minted in PDFMSE17 (module cookies) instead of logging
@@ -1316,7 +1340,7 @@ test('PDFMSE19 accounts control room is superadmin-gated and system-wide', { tim
   ];
   anonHits.forEach((h) => assert.equal(h.status, 401, `unsigned must be 401: ${JSON.stringify(h.data)}`));
 
-  // ---- non-superadmin → 403 on every accounts API ----
+  // ---- non-admin (tenant-only) → 401 on every accounts API ----
   const normHits = [
     await norm.req('GET', '/api/admin/accounts'),
     await norm.req('GET', `/api/admin/accounts/${accountId}`),
@@ -1324,11 +1348,11 @@ test('PDFMSE19 accounts control room is superadmin-gated and system-wide', { tim
     await norm.req('PATCH', `/api/admin/accounts/${accountId}/plan`, { plan_code: 'pro' }),
   ];
   normHits.forEach((h) => {
-    assert.equal(h.status, 403, `non-superadmin must be 403: ${JSON.stringify(h.data)}`);
-    assert.match(String(h.data?.error || ''), /superadmin/i);
+    assert.equal(h.status, 401, `tenant-only session must be 401: ${JSON.stringify(h.data)}`);
+    assert.match(String(h.data?.error || ''), /administrator/i);
   });
   const normPage = await fetch(`${BASE}/admin/accounts`, { method: 'GET', redirect: 'manual', headers: { Cookie: norm.cookie } });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin/accounts must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin/accounts must never render (got ${normPage.status})`);
 
   // ---- superadmin → list is system-wide and shaped ----
   const list = await admin.req('GET', '/api/admin/accounts');
@@ -1413,14 +1437,15 @@ test('PDFMSE21 system health is superadmin-gated and reports live platform state
   const norm = new Agent();
   norm.cookie = globalThis.normSession;
 
-  // Unsigned → 401; non-superadmin → 403.
+  // Unsigned → 401; non-admin → 401 (separate admin identity).
   const anon = new Agent();
   const anonHit = await anon.req('GET', '/api/admin/system');
   assert.equal(anonHit.status, 401, `unsigned must be 401: ${JSON.stringify(anonHit.data)}`);
   const normHit = await norm.req('GET', '/api/admin/system');
-  assert.equal(normHit.status, 403, `non-superadmin must be 403: ${JSON.stringify(normHit.data)}`);
+  assert.equal(normHit.status, 401, `tenant-only session must be 401: ${JSON.stringify(normHit.data)}`);
+  assert.match(String(normHit.data?.error || ''), /administrator/i);
   const normPage = await fetch(`${BASE}/admin/system`, { method: 'GET', redirect: 'manual', headers: { Cookie: norm.cookie } });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin/system must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin/system must never render (got ${normPage.status})`);
 
   // Superadmin → shaped, live health payload.
   const hit = await admin.req('GET', '/api/admin/system');
@@ -1480,9 +1505,10 @@ test('PDFMSE23 scoring configuration is superadmin-gated and surfaced system-wid
   const anonHit = await new Agent().req('GET', '/api/admin/scoring');
   assert.equal(anonHit.status, 401, `unsigned must be 401: ${JSON.stringify(anonHit.data)}`);
   const normHit = await norm.req('GET', '/api/admin/scoring');
-  assert.equal(normHit.status, 403, `non-superadmin must be 403: ${JSON.stringify(normHit.data)}`);
+  assert.equal(normHit.status, 401, `tenant-only session must be 401: ${JSON.stringify(normHit.data)}`);
+  assert.match(String(normHit.data?.error || ''), /administrator/i);
   const normPage = await fetch(`${BASE}/admin/scoring`, { method: 'GET', redirect: 'manual', headers: { Cookie: norm.cookie } });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin/scoring must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin/scoring must never render (got ${normPage.status})`);
 
   const hit = await admin.req('GET', '/api/admin/scoring');
   assert.equal(hit.status, 200, JSON.stringify(hit.data));
@@ -1559,9 +1585,10 @@ test('PDFMSE25 usage & cost control room is superadmin-gated and system-wide', {
   const anonHit = await new Agent().req('GET', '/api/admin/usage');
   assert.equal(anonHit.status, 401, `unsigned must be 401: ${JSON.stringify(anonHit.data)}`);
   const normHit = await norm.req('GET', '/api/admin/usage');
-  assert.equal(normHit.status, 403, `non-superadmin must be 403: ${JSON.stringify(normHit.data)}`);
+  assert.equal(normHit.status, 401, `tenant-only session must be 401: ${JSON.stringify(normHit.data)}`);
+  assert.match(String(normHit.data?.error || ''), /administrator/i);
   const normPage = await fetch(`${BASE}/admin/usage`, { method: 'GET', redirect: 'manual', headers: { Cookie: norm.cookie } });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin/usage must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin/usage must never render (got ${normPage.status})`);
 
   const hit = await admin.req('GET', '/api/admin/usage');
   assert.equal(hit.status, 200, JSON.stringify(hit.data));
@@ -1670,9 +1697,10 @@ test('PDFMSE27 audit log control room is superadmin-gated and system-wide', { ti
   const anonHit = await new Agent().req('GET', '/api/admin/audit');
   assert.equal(anonHit.status, 401, `unsigned must be 401: ${JSON.stringify(anonHit.data)}`);
   const normHit = await norm.req('GET', '/api/admin/audit');
-  assert.equal(normHit.status, 403, `non-superadmin must be 403: ${JSON.stringify(normHit.data)}`);
+  assert.equal(normHit.status, 401, `tenant-only session must be 401: ${JSON.stringify(normHit.data)}`);
+  assert.match(String(normHit.data?.error || ''), /administrator/i);
   const normPage = await fetch(`${BASE}/admin/audit`, { method: 'GET', redirect: 'manual', headers: { Cookie: norm.cookie } });
-  assert.ok(![200].includes(normPage.status), `non-superadmin /admin/audit must never render (got ${normPage.status})`);
+  assert.ok(![200].includes(normPage.status), `non-admin /admin/audit must never render (got ${normPage.status})`);
 
   const hit = await admin.req('GET', '/api/admin/audit');
   assert.equal(hit.status, 200, JSON.stringify(hit.data));

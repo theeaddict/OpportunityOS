@@ -31,7 +31,13 @@ export default function AppShell({ user, children }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  if (!user) {
+  // The control room (/admin/*) has its own shell (components/AdminShell.js),
+  // nested inside this one via app/admin/(control)/layout.js. Without this
+  // check, an operator who is ALSO a signed-in tenant user in the same
+  // browser — the normal case for the person running their own workspace AND
+  // administering the platform — gets two competing fixed-position sidebars,
+  // with this tenant one winning and the real admin nav never showing.
+  if (!user || pathname.startsWith('/admin')) {
     return <div className="min-h-screen">{children}</div>;
   }
 
@@ -94,8 +100,45 @@ export default function AppShell({ user, children }) {
       </aside>
 
       <main className={`flex-1 ${open ? 'hidden lg:block' : ''} min-w-0`}>
-        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">{children}</div>
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+          {!user.email_verified_at && !pathname.startsWith('/verify-email') && <VerifyEmailBanner email={user.email} />}
+          {children}
+        </div>
       </main>
+    </div>
+  );
+}
+
+function VerifyEmailBanner({ email }) {
+  const [state, setState] = useState('idle'); // idle | sending | sent | error
+  const [message, setMessage] = useState('');
+
+  async function resend() {
+    setState('sending');
+    const res = await fetch('/api/auth/resend-verification', { method: 'POST' }).catch(() => null);
+    const data = res ? await res.json().catch(() => null) : null;
+    if (data?.ok) setState('sent');
+    else { setState('error'); setMessage(data?.error || 'Could not send the email. Try again later.'); }
+  }
+
+  return (
+    <div role="status" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <span>
+        {state === 'sent'
+          ? `Verification email sent to ${email}. Check your inbox (and spam).`
+          : `Please verify your email address (${email}) — we sent you a link when you signed up.`}
+        {state === 'error' && <span className="ml-2 text-red-700">{message}</span>}
+      </span>
+      {state !== 'sent' && (
+        <button
+          type="button"
+          onClick={resend}
+          disabled={state === 'sending'}
+          className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+        >
+          {state === 'sending' ? 'Sending…' : 'Resend email'}
+        </button>
+      )}
     </div>
   );
 }

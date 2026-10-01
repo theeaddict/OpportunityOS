@@ -17,6 +17,7 @@ const ADMIN_NAV = [
   { href: '/admin/api-keys', label: 'API keys', status: 'ready' },
   { href: '/admin/customer-care', label: 'Customer care', status: 'ready' },
   { href: '/admin/system', label: 'System health', status: 'ready' },
+  { href: '/admin/security', label: 'Security & 2FA', status: 'ready' },
   { href: '/admin/scoring', label: 'Scoring thresholds', status: 'ready' },
   { href: '/admin/audit', label: 'Audit log', status: 'ready' },
 ];

@@ -1,6 +1,6 @@
 import { retry } from '@/lib/jobs/queue';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError } from '@/lib/api-helpers';
 
 /**
  * Retry a failed job (human-initiated): the job goes straight back to the queue
@@ -9,6 +9,7 @@ import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // retry feeds the shared background queue
     const { id } = await params;
     const ok = await retry(Number(id), user.account_id);
     await audit('job.retried', {

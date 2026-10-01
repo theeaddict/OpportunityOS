@@ -1,11 +1,12 @@
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, jsonOk, handleRouteError, readJson, HttpError } from '@/lib/api-helpers';
 import { getAccount } from '@/lib/repositories/accounts';
 import { ingestLeads } from '@/lib/services/discovery';
 import { enqueue } from '@/lib/jobs/queue';
 import { audit } from '@/lib/audit';
-import { enforce } from '@/lib/rate-limit';
+import { enforce, rateLimit } from '@/lib/rate-limit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
 import { findAccountByApiKey } from '@/lib/accounts/api-keys';
+import { timingSafeEqual } from 'crypto';
 
 const TOKEN = process.env.OPPORTUNITYOS_INGEST_TOKEN || null;
 const INGEST_ACCOUNT_RAW = process.env.OPPORTUNITYOS_INGEST_ACCOUNT_ID || '';
@@ -19,12 +20,13 @@ async function accountFromAuth(request) {
   const api = request.headers.get('x-opportunityos-api-key') || request.headers.get('x-api-key');
   if (api) {
     const found = await findAccountByApiKey(api);
-    if (found) return { account_id: found.account_id, client: 'api_key', name: found.name };
+    if (found) return { account_id: found.account_id, client: 'api_key', name: found.name, key_id: found.key_id, rate_limit_hour: found.rate_limit_hour };
     return { client: 'api_key', invalid: true };
   }
   // Legacy operator token (scoped to exactly one account; never trust client headers).
+  // Compared in constant time so a token guess never leaks partial matches.
   const auth = request.headers.get('x-opportunityos-token');
-  if (auth && TOKEN && auth === TOKEN) {
+  if (auth && TOKEN && auth.length === TOKEN.length && timingSafeEqual(Buffer.from(auth), Buffer.from(TOKEN))) {
     return { account_id: INGEST_ACCOUNT_ID, client: 'token' };
   }
   return null;
@@ -41,8 +43,12 @@ async function accountFromAuth(request) {
  * this batch (e.g. a fresh social post) and are re-processed, not skipped.
  *
  * Auth: an operator token (OPPORTUNITYOS_INGEST_TOKEN) via
- * X-Opportunityos-Token + X-Opportunityos-Account headers, OR a signed-in
- * session.
+ * X-Opportunityos-Token (the account is bound server-side by
+ * OPPORTUNITYOS_INGEST_ACCOUNT_ID and is overridden by a platform-issued API
+ * key when both are present — never taken from request headers), OR a
+ * signed-in session. Webhook-token requests are checked against the account's
+ * status server-side; session requests go through requireAccount, which now
+ * also rejects suspended workspaces.
  */
 export async function POST(request) {
   try {
@@ -61,6 +67,27 @@ export async function POST(request) {
     }
 
     enforce(request, { limit: 600, windowMs: 60 * 60_000, key: 'leads-ingest' });
+
+    // Account-level budget (IP-independent): complements the per-IP enforce above
+    // so a leaked token or key — which is bound to a single account server-side —
+    // cannot be hammered from many source IPs at once.
+    const acctBudget = rateLimit(`leads-ingest:acct:${accountId}`, { limit: 600, windowMs: 60 * 60_000 });
+    if (!acctBudget.ok) {
+      const err = new HttpError(429, 'Too many requests for this account — please try again later.');
+      err.retryAfterMs = acctBudget.retryAfterMs;
+      throw err;
+    }
+
+    // Per-key hourly cap set by the operator in the control room (blank = only
+    // the account budget above applies).
+    if (auth?.key_id && auth.rate_limit_hour) {
+      const keyBudget = rateLimit(`leads-ingest:key:${auth.key_id}`, { limit: auth.rate_limit_hour, windowMs: 60 * 60_000 });
+      if (!keyBudget.ok) {
+        const err = new HttpError(429, 'This API key has reached its hourly request limit.');
+        err.retryAfterMs = keyBudget.retryAfterMs;
+        throw err;
+      }
+    }
 
     const body = await readJson(request);
     const candidates = Array.isArray(body.results) ? body.results : [];

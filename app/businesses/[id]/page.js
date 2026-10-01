@@ -53,11 +53,33 @@ export default async function BusinessDetailPage({ params }) {
             <p className="mt-2 text-sm text-gray-700">{business.description || 'No description on file yet.'}</p>
           </div>
         </div>
-        {sources.length > 0 && (
-          <p className="mt-3 text-xs text-gray-400">
-            Found via: {sources.map((s) => s.source_name).join(', ')}
-          </p>
-        )}
+
+        {/* Per-field provenance: these identity fields (name/industry/location/
+            country/website) come from the business record as a whole, not
+            individual evidence rows, so the real granularity this schema
+            tracks is one shared source list + one found-on date for all of
+            them — showing a separate confidence per field would imply
+            precision that doesn't exist. True per-claim source/confidence/
+            date lives on the Evidence list below (business_evidence rows). */}
+        <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-2 border-t border-gray-100 pt-4 text-xs sm:grid-cols-2">
+          {[
+            ['Name', business.name],
+            ['Industry', business.industry],
+            ['Location', business.location],
+            ['Country', business.country],
+            ['Website', business.website],
+          ].map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-3">
+              <dt className="font-semibold text-gray-500">{label}</dt>
+              <dd className={value ? 'text-gray-700' : 'italic text-gray-400'}>{value || 'Not provided'}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 text-xs text-gray-400">
+          {sources.length > 0
+            ? <>Source{sources.length === 1 ? '' : 's'}: {sources.map((s) => s.source_name).join(', ')} · on file since {String(business.created_at).slice(0, 10)}</>
+            : 'No source on file for this business record.'}
+        </p>
       </Card>
 
       {researchProfile && (

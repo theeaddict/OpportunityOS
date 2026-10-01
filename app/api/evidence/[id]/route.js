@@ -1,11 +1,12 @@
 import * as evidenceRepo from '@/lib/repositories/evidence';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { SIGNAL_KEYS } from '@/lib/constants';
 
 export async function PATCH(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // evidence edits are account-wide data
     const { id } = await params;
     const existing = await evidenceRepo.findById(user.account_id, Number(id));
     if (!existing) return Response.json({ ok: false, error: 'Evidence not found' }, { status: 404 });
@@ -32,6 +33,7 @@ export async function PATCH(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // evidence deletions are account-wide data
     const { id } = await params;
     await evidenceRepo.removeEvidence(user.account_id, Number(id));
     await audit('evidence.deleted', { entity_type: 'business_evidence', entity_id: Number(id), user_id: user.id, account_id: user.account_id });

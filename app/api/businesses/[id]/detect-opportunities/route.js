@@ -1,12 +1,13 @@
 import { detectOpportunities } from '@/lib/services/analysis';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError } from '@/lib/api-helpers';
 import { enforce } from '@/lib/rate-limit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
 
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // detection spends the account's opportunity allowance
     enforce(request, { limit: 60, windowMs: 60 * 60_000, key: 'detect-opportunities' });
     await assertWithinLimit(user.account_id, 'opportunities');
     const { id } = await params;

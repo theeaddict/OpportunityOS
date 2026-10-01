@@ -1,4 +1,4 @@
-import { requireUser } from '@/lib/api-helpers';
+import { requireUser, requireSuperadmin } from '@/lib/api-helpers';
 import { isAtLeast } from '@/lib/accounts/roles';
 import { aiProvider } from '@/lib/ai/provider';
 import { businessResearchSchema, opportunityAnalystSchema, createSolutionMatchingSchema, outreachSchema, demoSpecSchema } from '@/lib/ai/schemas';
@@ -21,7 +21,12 @@ export const dynamic = 'force-dynamic';
  * controlled [DEMO] sample business seeded by migration 003 and validates the
  * results end to end through the real provider.
  */
-export async function GET() {
+export async function POST() {
+  // Platform-operator tool: Part B spends the operator's AI key and is not
+  // metered against any plan, so a workspace admin (every self-serve signup)
+  // must not reach it. Needs a platform-admin session AND a workspace session.
+  const platformAdmin = await requireSuperadmin().catch(() => null);
+  if (!platformAdmin) return Response.json({ ok: false, error: 'Platform administrator sign-in required' }, { status: 403 });
   const user = await requireUser().catch(() => null);
   if (!user) return Response.json({ ok: false, error: 'Not signed in' }, { status: 401 });
   if (!isAtLeast(user, 'admin')) return Response.json({ ok: false, error: 'Admin only' }, { status: 403 });

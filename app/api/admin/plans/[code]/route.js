@@ -58,6 +58,10 @@ export async function PATCH(request, { params }) {
       fields.is_active = body.is_active === true || body.is_active === 1;
       changed = true;
     }
+    if (body.stripe_price_id !== undefined) {
+      fields.stripe_price_id = body.stripe_price_id ? String(body.stripe_price_id).trim().slice(0, 120) : null;
+      changed = true;
+    }
 
     if (!changed) return jsonOk({ plan });
     await updatePlan(code, fields);

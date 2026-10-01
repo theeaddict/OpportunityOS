@@ -42,3 +42,26 @@ export async function PATCH(request, { params }) {
     return handleRouteError(err);
   }
 }
+
+export async function DELETE(_request, { params }) {
+  try {
+    const user = await requireAccount();
+    requireRole(user, 'admin');
+    const { id } = await params;
+    const existing = await solutionsRepo.findById(user.account_id, Number(id));
+    if (!existing) return Response.json({ ok: false, error: 'Solution not found' }, { status: 404 });
+    await solutionsRepo.deleteSolution(user.account_id, existing.id);
+    // deleteSolution keeps any solution that existing opportunities were matched
+    // to (history stays intact) — say so instead of reporting a delete that didn't happen.
+    if (await solutionsRepo.findById(user.account_id, existing.id)) {
+      return Response.json(
+        { ok: false, error: 'This solution is referenced by existing opportunities, so it can’t be deleted. Deactivate it instead.' },
+        { status: 409 }
+      );
+    }
+    await audit('solution.deleted', { entity_type: 'solutions', entity_id: existing.id, user_id: user.id, account_id: user.account_id });
+    return jsonOk({ id: existing.id });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}

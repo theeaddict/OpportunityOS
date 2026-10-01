@@ -409,8 +409,8 @@ The owner's own business profile: services, industries_served, technologies, sol
 | `/api/settings` | GET, PATCH | App settings (per-account) |
 | `/api/settings/capabilities` | GET, PATCH | User capabilities |
 | `/api/settings/score-thresholds` | GET, PATCH | Score thresholds (admin) |
-| `/api/system/self-test` | GET | 43-assertion self-test (admin) |
-| `/api/system/ai-test` | GET | AI transport diagnostic |
+| `/api/system/self-test` | POST | 43-assertion self-test (admin) |
+| `/api/system/ai-test` | POST | AI transport diagnostic |
 
 ---
 
@@ -449,7 +449,7 @@ Scrypt (N=16384, r=8, p=1, 64-byte hash) with `crypto.timingSafeEqual`. Password
 
 ## 15. Tests
 
-### Self-Test (`GET /api/system/self-test`)
+### Self-Test (`POST /api/system/self-test`)
 
 43 inline assertions, admin-only. Covers:
 - Normalization (business name, phone, social handle, email)

@@ -64,6 +64,7 @@ export async function POST(request) {
       description: String(body.description || '').slice(0, 300) || null,
       ...limits,
       currency,
+      stripe_price_id: body.stripe_price_id ? String(body.stripe_price_id).trim().slice(0, 120) : null,
       is_active: body.is_active !== false,
     };
     await createPlan(plan);

@@ -1,7 +1,7 @@
 import * as businessesRepo from '@/lib/repositories/businesses';
 import * as evidenceRepo from '@/lib/repositories/evidence';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { SIGNAL_KEYS } from '@/lib/constants';
 
 const CLAIM_TYPES = ['FACT', 'INFERENCE', 'HYPOTHESIS'];
@@ -10,6 +10,7 @@ const EVIDENCE_TYPES = ['observation','public_stat','customer_review','listing_d
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // adding evidence mutates the growth profile and can auto-detect
     const { id } = await params;
     const businessId = Number(id);
     const business = await businessesRepo.findBusiness(user.account_id, businessId);

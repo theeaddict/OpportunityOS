@@ -297,7 +297,7 @@ question its own outputs — not yet a deployed business tool.
 ### Quick reference: environment
 
 ```env
-DATABASE_URL=mysql://root:root@127.0.0.1:3307/opportunityos   # MariaDB 10.11 (Docker, host 24a911d80c53)
+DATABASE_URL=mysql://root:CHANGE_ME@127.0.0.1:3307/opportunityos   # MariaDB 10.11 (Docker, host 24a911d80c53)
 SESSION_SECRET=dev-secret-...                                  # HMAC signing (dev value)
 APP_URL=http://localhost:3000
 AI_PROVIDER=openai-compatible

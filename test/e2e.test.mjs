@@ -20,6 +20,8 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import mysql from 'mysql2/promise';
+import crypto from 'node:crypto';
+import { totpNow } from '../lib/totp.js';
 
 const BASE = process.env.E2E_APP_BASE_URL || 'http://127.0.0.1:3100';
 const AI_URL = process.env.E2E_AI_URL || 'http://127.0.0.1:4321';
@@ -75,7 +77,13 @@ function csrfFrom(cookie) {
 }
 
 class Agent {
-  constructor() { this.cookie = null; }
+  // `ip` sets X-Forwarded-For for this agent so per-IP rate-limit buckets are
+  // isolated (the app also treats an absent header as 'local') — required by
+  // the smaller suites that programmatically park several requests short.
+  constructor({ ip } = {}) {
+    this.cookie = null;
+    this.ip = ip || null;
+  }
 
   async req(method, path, body) {
     const isSafe = ['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase());
@@ -85,6 +93,7 @@ class Agent {
       redirect: 'manual',
       headers: {
         'Content-Type': 'application/json',
+        ...(this.ip ? { 'X-Forwarded-For': this.ip } : {}),
         ...(this.cookie ? { Cookie: this.cookie } : {}),
         ...(!isSafe && csrf ? { 'X-CSRF-Token': csrf } : {}),
       },
@@ -119,6 +128,14 @@ async function researchCtl(mode) {
 async function db(sql, params = []) {
   const [rows] = await pool.execute(sql, params);
   return rows;
+}
+
+// Mirrors lib/auth.js hashPassword + scripts/setup-db.js so a fixture admin
+// row can be created directly with a verifiable credential.
+function scryptHash(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+  return `$scrypt$N=16384$r=8$p=1$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
 async function pollUntil(fn, { tries = 120, interval = 1000, label = 'poll' } = {}) {
@@ -199,6 +216,41 @@ test('PDFMS01 new user can register a workspace and owns it', { timeout: 30000 }
   assert.equal(biz.data.businesses.length, 0);
 
   globalThis.owner = a;
+});
+
+test('PDFMS02a new workspaces start with a starter solution library (never empty)', { timeout: 60000 }, async () => {
+  const a = globalThis.owner;
+  const seeded = await a.req('GET', '/api/solutions');
+  assert.equal(seeded.status, 200);
+  const starters = seeded.data.solutions;
+  assert.ok(starters.length >= 10, `a new workspace must be seeded with starter solutions (got ${starters.length})`);
+  assert.ok(starters.every((s) => /Starter template/.test(s.description)), 'seeded rows must be labelled as editable templates');
+  assert.ok(starters.every((s) => s.solves_problem_types.length > 0 && Number(s.project_value.base) > 0), 'starters must carry problems and pricing');
+
+  // Loading again is idempotent and never overwrites an edit the owner made.
+  const edited = starters[0];
+  const patch = await a.req('PATCH', `/api/solutions/${edited.id}`, { description: 'Edited by the owner' });
+  assert.equal(patch.status, 200, JSON.stringify(patch.data));
+  const again = await a.req('POST', '/api/solutions/starter');
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  assert.equal(again.data.added, 0, 'nothing is missing, so nothing is added');
+  const after = await a.req('GET', '/api/solutions');
+  assert.equal(after.data.solutions.length, starters.length, 'no duplicates created');
+  assert.equal(after.data.solutions.find((s) => s.id === edited.id).description, 'Edited by the owner', 'an edited starter must survive a reload of the starters');
+
+  // A deleted starter comes back on request; everything else is untouched.
+  const del = await a.req('DELETE', `/api/solutions/${starters[1].id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.data));
+  const restore = await a.req('POST', '/api/solutions/starter');
+  assert.equal(restore.data.added, 1, 'only the deleted starter is re-added');
+
+  // PDFMS02 below wants a controlled library, so clear the starters first.
+  const current = (await a.req('GET', '/api/solutions')).data.solutions;
+  for (const s of current) {
+    const r = await a.req('DELETE', `/api/solutions/${s.id}`);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+  }
+  assert.equal((await a.req('GET', '/api/solutions')).data.solutions.length, 0);
 });
 
 test('PDFMS02 create a solution library the provider can deliver', { timeout: 30000 }, async () => {
@@ -1099,10 +1151,33 @@ test('PDFMSE13 admin self-test: 43/43 deterministic engine + repo integrity', { 
     email: 'admin@example.com', password: 'opportunityos',
   });
   assert.equal(login.status, 200, JSON.stringify(login.data));
-  const res = await admin.req('GET', '/api/system/self-test');
+
+  // A workspace admin alone (what every self-serve signup is) must be refused:
+  // the self-test creates/deletes accounts+users and is platform-operator only.
+  const alone = await admin.req('POST', '/api/system/self-test');
+  assert.equal(alone.status, 403, `workspace admin alone must not run the self-test: ${alone.status}`);
+  const aloneAi = await admin.req('POST', '/api/system/ai-test');
+  assert.equal(aloneAi.status, 403, `workspace admin alone must not run the AI test (it spends the operator AI key): ${aloneAi.status}`);
+
+  // With a platform-admin session ALSO present it runs. Agent holds one cookie
+  // jar, so combine the two sessions by hand (proxy screens the admin CSRF pair).
+  const platform = new Agent();
+  const platLogin = await platform.req('POST', '/api/admin/login', { email: 'admin@example.com', password: 'opportunityos' });
+  assert.equal(platLogin.status, 200, JSON.stringify(platLogin.data));
+  const both = `${admin.cookie}; ${platform.cookie}`;
+  const raw = await fetch(`${BASE}/api/system/self-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: both, 'X-CSRF-Token': csrfFrom(both) },
+  });
+  const res = { status: raw.status, data: await raw.json().catch(() => null) };
   assert.equal(res.status, 200, JSON.stringify({ summary: res.data?.summary, error: res.data?.error }));
   assert.equal(res.data.ok, true, `self-test must pass entirely: ${res.data?.summary}`);
   assert.equal(res.data.summary, '43/43 passed');
+
+  // Self-test triggers outsourced writes (records + cleanup) so it must refuse
+  // side-effectful GETs entirely (M1: no CSRF-screened mutating request).
+  const getBlocked = await admin.req('GET', '/api/system/self-test');
+  assert.equal(getBlocked.status, 405, `self-test must refuse GET: ${getBlocked.status}`);
 });
 
 test('PDFMSE12 login rate limiting returns 429 with Retry-After', { timeout: 90000 }, async () => {
@@ -1766,6 +1841,313 @@ test('PDFMSE28 audit log matches the audit_logs table exactly', { timeout: 60000
   assert.equal(scoring.data.audit.rows.length, wantScoring,
     `scoring-defaults filter must return exactly the table's rows (${wantScoring})`);
   assert.ok(scoring.data.audit.rows.every((r) => r.action === 'admin.scoring_defaults_updated'));
+});
+
+// ---------------------------------------------------------------------------
+// Authentication hardening (Group 2): admin 2FA + per-email lockout, and
+// server-side session revocation on password change / suspension.
+// ---------------------------------------------------------------------------
+
+test('PDFMSE29 admin two-factor lifecycle + code required at login', { timeout: 60000 }, async () => {
+  const admin = new Agent({ ip: '10.77.0.1' });
+  admin.cookie = superadminCookie; // valid admin session minted in PDFMSE17
+
+  const gen = await admin.req('POST', '/api/admin/2fa', { action: 'generate' });
+  assert.equal(gen.status, 200, JSON.stringify(gen.data));
+  assert.ok(gen.data.secret && gen.data.uri, 'generate must return a secret + otpauth URI');
+  const [preEnable] = await pool.execute('SELECT otp_enabled, otp_pending_secret FROM admin_users WHERE email = ?', ['admin@example.com']);
+  assert.equal(Boolean(preEnable[0].otp_enabled), false, 'generate must NOT enable 2FA yet (pending only)');
+  assert.ok(preEnable[0].otp_pending_secret, 'generate must store an unverified pending secret');
+
+  // The pending secret is inert: plain credentials still log in — login() only
+  // consults otp_enabled && otp_secret, never otp_pending_secret.
+  const pendingWindow = new Agent({ ip: '10.77.0.2' });
+  const pendingLogin = await pendingWindow.req('POST', '/api/admin/login', {
+    email: 'admin@example.com', password: 'opportunityos',
+  });
+  assert.equal(pendingLogin.status, 200,
+    'an unverified pending secret must not block or alter login');
+
+  const bad = await admin.req('POST', '/api/admin/2fa', { action: 'enable', code: '123456' });
+  assert.equal(bad.status, 400, `enable must reject a wrong code: ${JSON.stringify(bad.data)}`);
+
+  const en = await admin.req('POST', '/api/admin/2fa', { action: 'enable', code: totpNow(gen.data.secret) });
+  assert.equal(en.status, 200, JSON.stringify(en.data));
+  assert.equal(Array.isArray(en.data.backupCodes) && en.data.backupCodes.length === 10, true,
+    'enable must return 10 one-time backup codes');
+
+  // 2FA is now enforced at /api/admin/login.
+  const noCode = new Agent({ ip: '10.77.0.3' });
+  const noCodeRes = await noCode.req('POST', '/api/admin/login', {
+    email: 'admin@example.com', password: 'opportunityos',
+  });
+  assert.equal(noCodeRes.status, 401, 'login without a code must be two_factor_required');
+  assert.equal(noCodeRes.data.code, 'two_factor_required', 'must carry the machine-readable code');
+
+  const wrong = new Agent({ ip: '10.77.0.4' });
+  const wrongRes = await wrong.req('POST', '/api/admin/login', {
+    email: 'admin@example.com', password: 'opportunityos', code: '111111',
+  });
+  assert.equal(wrongRes.status, 401, 'login with a wrong code must be two_factor_invalid');
+  assert.equal(wrongRes.data.code, 'two_factor_invalid', 'must carry the machine-readable code');
+
+  const good = new Agent({ ip: '10.77.0.5' });
+  const withCode = await good.req('POST', '/api/admin/login', {
+    email: 'admin@example.com', password: 'opportunityos', code: totpNow(gen.data.secret),
+  });
+  assert.equal(withCode.status, 200, JSON.stringify(withCode.data));
+  const overview = await good.req('GET', '/api/admin/overview');
+  assert.equal(overview.status, 200, 'issued admin session must work with 2FA active');
+
+  // Disable needs a valid code too.
+  const disBad = await admin.req('POST', '/api/admin/2fa', { action: 'disable', code: '999999' });
+  assert.equal(disBad.status, 400, `disable must reject a wrong code: ${JSON.stringify(disBad.data)}`);
+  const dis = await admin.req('POST', '/api/admin/2fa', { action: 'disable', code: totpNow(gen.data.secret) });
+  assert.equal(dis.status, 200, JSON.stringify(dis.data));
+
+  // After disabling, plain credentials log in again (state restored for PDFMSE30+).
+  const plain = new Agent({ ip: '10.77.0.6' });
+  const plainLogin = await plain.req('POST', '/api/admin/login', {
+    email: 'admin@example.com', password: 'opportunityos',
+  });
+  assert.equal(plainLogin.status, 200, JSON.stringify(plainLogin.data));
+});
+
+test('PDFMSE30 admin per-email lockout returns 429 after 5 failures', { timeout: 60000 }, async () => {
+  const email = `e2e-adminlock-${stamp}@example.test`;
+  await db('INSERT INTO admin_users (name, email, password_hash) VALUES (?, ?, ?)', [
+    'Lockout Probe', email, scryptHash('E2eCorrectHorse42!'),
+  ]);
+  try {
+    const brute = new Agent({ ip: '10.77.0.10' });
+    for (let i = 0; i < 5; i++) {
+      const r = await brute.req('POST', '/api/admin/login', { email, password: 'WrongHorse42!' });
+      assert.equal(r.status, 401, `failure #${i + 1} must be 401: ${JSON.stringify(r.data)}`);
+    }
+    const last = await brute.req('POST', '/api/admin/login', { email, password: 'WrongHorse42!' });
+    assert.equal(last.status, 429, `6th failure must lock the email: ${JSON.stringify(last.data)}`);
+    assert.ok(Number(last.headers.get('retry-after')) >= 1, '429 must carry Retry-After');
+
+    // The lock is per (email, source IP): the attacker stays locked — even with
+    // the CORRECT password — so guessing from their address is over...
+    const again = await brute.req('POST', '/api/admin/login', { email, password: 'E2eCorrectHorse42!' });
+    assert.equal(again.status, 429, `the guessing IP must stay locked: ${JSON.stringify(again.data)}`);
+    assert.match(String(again.data?.error || ''), /15 minutes/i);
+
+    // ...but a stranger failing logins must not be able to lock the real admin
+    // out: the legitimate user, from their own IP, still signs in.
+    const fresh = new Agent({ ip: '10.77.0.11' });
+    const real = await fresh.req('POST', '/api/admin/login', { email, password: 'E2eCorrectHorse42!' });
+    assert.equal(real.status, 200, `a different IP must not be locked out by someone else's failures: ${JSON.stringify(real.data)}`);
+  } finally {
+    await db('DELETE FROM admin_users WHERE email = ?', [email]);
+  }
+});
+
+test('PDFMSE30b per-API-key hourly limit is enforced on the leads webhook', { timeout: 60000 }, async () => {
+  const email = `e2e-keylimit-${stamp}@example.test`;
+  const tenant = new Agent({ ip: '10.77.0.15' });
+  const reg = await tenant.req('POST', '/api/auth/register', { name: 'Key Limit', email, password: PASSWORD });
+  assert.equal(reg.status, 200, JSON.stringify(reg.data));
+  const [{ account_id }] = await db('SELECT account_id FROM users WHERE email = ?', [email]);
+
+  const platform = new Agent({ ip: '10.77.0.16' });
+  const pl = await platform.req('POST', '/api/admin/login', { email: 'admin@example.com', password: 'opportunityos' });
+  assert.equal(pl.status, 200, JSON.stringify(pl.data));
+  const made = await platform.req('POST', '/api/admin/api-keys', { account_id, name: 'limited', rate_limit_hour: 2 });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  const fullKey = made.data.key.full_key;
+
+  // No session cookie: key-authenticated server-to-server calls.
+  const hook = (n) => fetch(`${BASE}/api/leads/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Opportunityos-Api-Key': fullKey, 'X-Forwarded-For': '10.77.0.17' },
+    body: JSON.stringify({ results: [{ name: `Key Limit Co ${stamp} ${n}`, industry: 'Retail', website: `keylimit-${stamp}-${n}.example.test` }] }),
+  });
+  const r1 = await hook(1);
+  const r2 = await hook(2);
+  const r3 = await hook(3);
+  assert.ok(r1.status >= 200 && r1.status < 300, `first call within the key limit: ${r1.status}`);
+  assert.ok(r2.status >= 200 && r2.status < 300, `second call within the key limit: ${r2.status}`);
+  assert.equal(r3.status, 429, 'third call in the hour must exceed rate_limit_hour=2');
+  assert.ok(Number(r3.headers.get('retry-after')) >= 1, '429 must carry Retry-After');
+});
+
+test('PDFMSE31 password change revokes other sessions, keeps the changer', { timeout: 60000 }, async () => {
+  const email = `e2e-rotate-${stamp}@example.test`;
+  const a = new Agent({ ip: '10.77.0.20' });
+  const reg = await a.req('POST', '/api/auth/register', { name: 'Password Rotator', email, password: PASSWORD });
+  assert.equal(reg.status, 200, JSON.stringify(reg.data));
+  const pre = await a.req('GET', '/api/account');
+  assert.equal(pre.status, 200, 'register session must work before the rotation');
+
+  const b = new Agent({ ip: '10.77.0.21' });
+  const lg = await b.req('POST', '/api/auth/login', { email, password: PASSWORD });
+  assert.equal(lg.status, 200, JSON.stringify(lg.data));
+
+  const change = await b.req('PATCH', '/api/settings/password', {
+    current_password: PASSWORD, new_password: 'RotatedHorse43!',
+  });
+  assert.equal(change.status, 200, JSON.stringify(change.data));
+
+  const bAfter = await b.req('GET', '/api/account');
+  assert.equal(bAfter.status, 200, 'the session that changed the password must survive');
+  const aAfter = await a.req('GET', '/api/account');
+  assert.equal(aAfter.status, 401, `older sessions must be revoked: ${JSON.stringify(aAfter.data)}`);
+
+  const [sess] = await pool.execute(
+    'SELECT COUNT(*) AS n FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.email = ?',
+    [email]
+  );
+  assert.equal(Number(sess[0].n), 1, 'exactly one session row (the changer) must remain');
+
+  const oldTry = new Agent({ ip: '10.77.0.22' });
+  const oldLogin = await oldTry.req('POST', '/api/auth/login', { email, password: PASSWORD });
+  assert.equal(oldLogin.status, 401, 'old password must be rejected after rotation');
+  const newTry = new Agent({ ip: '10.77.0.23' });
+  const newLogin = await newTry.req('POST', '/api/auth/login', { email, password: 'RotatedHorse43!' });
+  assert.equal(newLogin.status, 200, JSON.stringify(newLogin.data));
+});
+
+test('PDFMSE32 member suspension and account suspension revoke sessions', { timeout: 60000 }, async () => {
+  const ownerEmail = `e2e-susp-owner-${stamp}@example.test`;
+  const memberEmail = `e2e-susp-member-${stamp}@example.test`;
+  const owner = new Agent({ ip: '10.77.0.30' });
+  const regO = await owner.req('POST', '/api/auth/register', { name: 'Suspendable Owner', email: ownerEmail, password: PASSWORD });
+  assert.equal(regO.status, 200, JSON.stringify(regO.data));
+  const [ownerRow] = await pool.execute('SELECT id, account_id FROM users WHERE email = ?', [ownerEmail]);
+  const ownerUserId = Number(ownerRow[0].id);
+  const acctId = Number(ownerRow[0].account_id);
+
+  const member = new Agent({ ip: '10.77.0.31' });
+  const regM = await member.req('POST', '/api/auth/register', { name: 'Suspendable Member', email: memberEmail, password: PASSWORD });
+  assert.equal(regM.status, 200, JSON.stringify(regM.data));
+  const [memberRow] = await pool.execute('SELECT id FROM users WHERE email = ?', [memberEmail]);
+  const memberUserId = Number(memberRow[0].id);
+  await db('UPDATE users SET account_id = ?, role = ? WHERE id = ?', [acctId, 'member', memberUserId]);
+
+  const mOk = await member.req('GET', '/api/account');
+  assert.equal(mOk.status, 200, 'member session must work before suspension');
+
+  const susp = await owner.req('PATCH', `/api/account/members/${memberUserId}`, { status: 'suspended' });
+  assert.equal(susp.status, 200, JSON.stringify(susp.data));
+  const mAfter = await member.req('GET', '/api/account');
+  assert.equal(mAfter.status, 401, `suspended member's session must be revoked: ${JSON.stringify(mAfter.data)}`);
+  const [mSessions] = await pool.execute('SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?', [memberUserId]);
+  assert.equal(Number(mSessions[0].n), 0, 'suspended member must have zero session rows');
+
+  const reactM = await owner.req('PATCH', `/api/account/members/${memberUserId}`, { status: 'active' });
+  assert.equal(reactM.status, 200, JSON.stringify(reactM.data));
+
+  const admin = new Agent({ ip: '10.77.0.32' });
+  admin.cookie = superadminCookie;
+  const acctSusp = await admin.req('POST', `/api/admin/accounts/${acctId}/status`, { status: 'suspended' });
+  assert.equal(acctSusp.status, 200, JSON.stringify(acctSusp.data));
+  const oAfter = await owner.req('GET', '/api/account');
+  assert.equal(oAfter.status, 401, `account-owner session must be revoked on suspension: ${JSON.stringify(oAfter.data)}`);
+  const [acctSessions] = await pool.execute(
+    'SELECT COUNT(*) AS n FROM sessions WHERE user_id IN (SELECT id FROM users WHERE account_id = ?)',
+    [acctId]
+  );
+  assert.equal(Number(acctSessions[0].n), 0, 'a suspended account must have zero session rows');
+
+  // Suspension must also block NEW logins (not just revoke live sessions), and
+  // must NEVER surface as a distinct 403/oracle — suspended credentials respond
+  // identically to bad ones (-3: login flattening). Sessions are separately
+  // revoked above, which is what actually locks a suspended workspace down.
+  const suspendedLogin = new Agent({ ip: '10.77.0.34' });
+  const lgBlocked = await suspendedLogin.req('POST', '/api/auth/login', { email: ownerEmail, password: PASSWORD });
+  assert.equal(lgBlocked.status, 401, JSON.stringify(lgBlocked.data));
+  assert.equal(lgBlocked.data.code, undefined, 'no machine-readable suspension code may leak');
+  assert.match(String(lgBlocked.data.error || ''), /invalid email or password/i,
+    'suspended login must be indistinguishable from bad credentials');
+
+  const acctReact = await admin.req('POST', `/api/admin/accounts/${acctId}/status`, { status: 'active' });
+  assert.equal(acctReact.status, 200, JSON.stringify(acctReact.data));
+  const reLogin = new Agent({ ip: '10.77.0.33' });
+  const lg = await reLogin.req('POST', '/api/auth/login', { email: ownerEmail, password: PASSWORD });
+  assert.equal(lg.status, 200, JSON.stringify(lg.data));
+  const check = await reLogin.req('GET', '/api/account');
+  assert.equal(check.status, 200, 'a reactivated account must accept logins again');
+});
+
+test('PDFMSE33 member role scope: account-wide mutations become 403, reads stay 200', { timeout: 60000 }, async () => {
+  const ownerEmail = `e2e-scope-owner-${stamp}@example.test`;
+  const memberEmail = `e2e-scope-member-${stamp}@example.test`;
+  const owner = new Agent({ ip: '10.77.0.40' });
+  const regO = await owner.req('POST', '/api/auth/register', { name: 'Scope Owner', email: ownerEmail, password: PASSWORD });
+  assert.equal(regO.status, 200, JSON.stringify(regO.data));
+  const [ownerRow] = await pool.execute('SELECT account_id FROM users WHERE email = ?', [ownerEmail]);
+  const acctId = Number(ownerRow[0].account_id);
+
+  const member = new Agent({ ip: '10.77.0.41' });
+  const regM = await member.req('POST', '/api/auth/register', { name: 'Scope Member', email: memberEmail, password: PASSWORD });
+  assert.equal(regM.status, 200, JSON.stringify(regM.data));
+  const [memberRow] = await pool.execute('SELECT id FROM users WHERE email = ?', [memberEmail]);
+  const memberUserId = Number(memberRow[0].id);
+  await db('UPDATE users SET account_id = ?, role = ? WHERE id = ?', [acctId, 'member', memberUserId]);
+
+  // M2: the account payload no longer leaks the roster to members.
+  const memberAcct = await member.req('GET', '/api/account');
+  assert.equal(memberAcct.status, 200, JSON.stringify(memberAcct.data));
+  assert.deepEqual(memberAcct.data.team, [], 'members must not receive the team roster');
+  assert.equal(memberAcct.data.canManage, false);
+  assert.ok(memberAcct.data.plan, 'shared plan state must stay visible');
+
+  const ownerAcct = await owner.req('GET', '/api/account');
+  assert.ok(ownerAcct.data.team.length >= 1, 'owners still get the full roster');
+
+  // M2: score thresholds are admin-config, members get the rest of settings.
+  const memberSettings = await member.req('GET', '/api/settings');
+  assert.equal(memberSettings.status, 200, JSON.stringify(memberSettings.data));
+  assert.ok(!('score_thresholds' in (memberSettings.data || {})), 'members must not see score_thresholds');
+  const ownerSettings = await owner.req('GET', '/api/settings');
+  assert.ok(ownerSettings.data.score_thresholds, 'owners still receive score_thresholds');
+
+  // H2: every account-wide mutation is refused with 403 before any lookup.
+  const blocked = [
+    ['POST', '/api/businesses', { name: 'x', website: 'https://x.test' }],
+    ['POST', '/api/jobs', {}],
+    ['POST', '/api/discover', { query: 'x' }],
+    ['PUT', '/api/discover', {}],
+    ['POST', '/api/owner', { onboard: true, business_name: 'x' }],
+    ['POST', '/api/discover/schedules', {}],
+    ['PATCH', '/api/discover/schedules/1', {}],
+    ['DELETE', '/api/discover/schedules/1'],
+    ['POST', '/api/discover/jobs/1/cancel'],
+    ['POST', '/api/jobs/1/cancel'],
+    ['POST', '/api/jobs/1/retry'],
+    ['POST', '/api/businesses/1/research'],
+    ['POST', '/api/businesses/1/detect-opportunities'],
+    ['POST', '/api/businesses/1/interpret'],
+    ['POST', '/api/businesses/1/evidence', { signal: 'website', note: 'x' }],
+    ['PATCH', '/api/evidence/1', {}],
+    ['DELETE', '/api/evidence/1'],
+    ['POST', '/api/businesses/1/contacts', {}],
+    ['DELETE', '/api/businesses/1/contacts'],
+  ];
+  for (const [method, path, body] of blocked) {
+    const r = await member.req(method, path, body);
+    assert.equal(r.status, 403, `${method} ${path} must be 403 for a member, got ${r.status}: ${JSON.stringify(r.data)}`);
+  }
+
+  // Members keep read access to everything (they use the same views).
+  const reads = [
+    ['GET', '/api/businesses'],
+    ['GET', '/api/jobs'],
+    ['GET', '/api/discover'],
+    ['GET', '/api/owner'],
+    ['GET', '/api/pipeline'],
+    ['GET', '/api/settings/capabilities'],
+  ];
+  for (const [method, path] of reads) {
+    const r = await member.req(method, path);
+    assert.equal(r.status, 200, `${method} ${path} must stay readable by a member, got ${r.status}: ${JSON.stringify(r.data)}`);
+  }
+
+  // Owners (>= admin) are unaffected by the new gates.
+  const ownerCreate = await owner.req('POST', '/api/businesses', { name: 'Still Works', website: 'https://stil-works.test' });
+  assert.ok([200, 201].includes(ownerCreate.status), `owners must still create businesses: ${JSON.stringify(ownerCreate.data)}`);
 });
 
 // ---------------------------------------------------------------------------

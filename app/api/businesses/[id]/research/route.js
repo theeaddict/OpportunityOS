@@ -1,7 +1,7 @@
 import * as businessesRepo from '@/lib/repositories/businesses';
 import { runAutomatedResearch, getCoverage } from '@/lib/services/research/run';
 import { getResearchProvider } from '@/lib/services/research';
-import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError } from '@/lib/api-helpers';
 import { enforce } from '@/lib/rate-limit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
 
@@ -25,9 +25,11 @@ export async function GET(request, { params }) {
 }
 
 // POST: run the automated research provider (website fetch / configured API).
+// Burns quota — OWNER/ADMIN only; the GET (read) stays viewable by members.
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin');
     enforce(request, { limit: 30, windowMs: 60 * 60_000, key: 'research' });
     await assertWithinLimit(user.account_id, 'researches');
     const { id } = await params;

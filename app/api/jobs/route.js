@@ -1,7 +1,7 @@
 import { enqueue, list } from '@/lib/jobs/queue';
 import { isJobType, JOB_TYPE_LABELS, JOB_TYPE_KEYS } from '@/lib/jobs/registry';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { enforce } from '@/lib/rate-limit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
 
@@ -31,6 +31,7 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // enqueuing jobs spends the account's plan allowance
     enforce(request, { limit: 30, windowMs: 60 * 60_000, key: 'job-enqueue' });
     const body = await readJson(request);
     const type = String(body.type || '').toUpperCase();

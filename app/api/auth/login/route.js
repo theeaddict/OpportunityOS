@@ -1,12 +1,13 @@
 import { login, recordFailedLogin, resetLoginThrottle, throttleStatus } from '@/lib/auth';
 import { audit } from '@/lib/audit';
 import { handleRouteError, readJson, HttpError } from '@/lib/api-helpers';
-import { enforce } from '@/lib/rate-limit';
+import { enforce, clientIp } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request) {
   let email = '';
+  const ip = clientIp(request);
   try {
     enforce(request, { limit: 10, windowMs: 15 * 60_000, key: 'login' });
     const body = await readJson(request);
@@ -14,7 +15,7 @@ export async function POST(request) {
 
     // Per-identifier lockout (BiasharaOS LoginThrottle parity): checked before
     // any scrypt work so a locked account burns no CPU and responds 429.
-    const status = throttleStatus(email);
+    const status = throttleStatus(email, ip);
     if (status.locked) {
       const err = new HttpError(429, 'Too many login attempts. Try again in 15 minutes.');
       err.retryAfterMs = status.remainingMs;
@@ -22,7 +23,7 @@ export async function POST(request) {
     }
 
     const userId = await login(email, String(body.password || ''), { code: body.code });
-    resetLoginThrottle(email);
+    resetLoginThrottle(email, ip);
     await audit('user.login', { entity_type: 'user', entity_id: userId });
     return Response.json({ ok: true });
   } catch (err) {
@@ -30,11 +31,11 @@ export async function POST(request) {
       return Response.json({ ok: false, error: err.message, code: 'two_factor_required' }, { status: 401 });
     }
     if (err.code === '2FA_INVALID') {
-      if (email) recordFailedLogin(email);
+      if (email) recordFailedLogin(email, ip);
       return Response.json({ ok: false, error: err.message, code: 'two_factor_invalid' }, { status: 401 });
     }
     if (/Invalid email or password/.test(err.message) && email) {
-      recordFailedLogin(email);
+      recordFailedLogin(email, ip);
       return Response.json({ ok: false, error: err.message }, { status: 401 });
     }
     return handleRouteError(err);

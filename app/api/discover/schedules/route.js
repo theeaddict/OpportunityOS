@@ -1,7 +1,7 @@
 import * as schedulesRepo from '@/lib/repositories/discover-schedules';
 import { parseJson } from '@/lib/db';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { defaultProvider } from '@/lib/services/discovery';
 import { watchLimitStatus, assertWithinWatchLimit } from '@/lib/accounts/usage';
 
@@ -28,6 +28,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // watches enqueue recurring discovery runs
     const body = await readJson(request);
     const name = String(body.name || body.query || body.industry || 'Untitled watch').slice(0, 160);
     if (!name.trim()) {

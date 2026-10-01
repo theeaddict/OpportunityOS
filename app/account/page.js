@@ -5,6 +5,7 @@ import * as accountsRepo from '@/lib/repositories/accounts';
 import { getUsage, getAccountLimits } from '@/lib/accounts/usage';
 import { PageHeader, Card } from '@/components/ui';
 import TeamManager from '@/components/TeamManager';
+import BillingUpgrade from '@/components/BillingUpgrade';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,14 +34,18 @@ function UsageRow({ label, used, limit }) {
 export default async function AccountPage() {
   const user = await getCurrentUser().catch(() => null);
   if (!user) redirect('/login');
-  const [usage, limits, team, account] = await Promise.all([
+  const canManage = isAtLeast(user, 'admin');
+  const canManageBilling = isAtLeast(user, 'owner');
+  // The roster (names + emails) is a management view; members see counts only.
+  const [usage, limits, team, account, plans] = await Promise.all([
     getUsage(user.account_id),
     getAccountLimits(user.account_id),
-    accountsRepo.listUsers(user.account_id),
+    canManage ? accountsRepo.listUsers(user.account_id) : Promise.resolve([]),
     accountsRepo.getAccount(user.account_id),
+    canManageBilling ? accountsRepo.listPlans() : Promise.resolve([]),
   ]);
-  const canManage = isAtLeast(user, 'admin');
   const usersLimit = limits.limits.users;
+  const purchasablePlans = plans.filter((p) => p.is_active && p.code !== 'internal');
 
   return (
     <>
@@ -60,13 +65,19 @@ export default async function AccountPage() {
               </p>
             </div>
           </div>
+          {canManageBilling && (
+            <BillingUpgrade
+              currentPlanCode={limits.plan}
+              plans={purchasablePlans}
+              canManage={canManageBilling}
+              hasBillingAccount={Boolean(account?.stripe_customer_id)}
+            />
+          )}
         </Card>
 
         <Card className="p-5">
           <h2 className="text-sm font-semibold text-gray-900">Usage this month</h2>
-          <p className="mt-0.5 text-xs text-gray-500">
-            Subscription-ready tracking — resets at the start of each month. No billing is connected yet.
-          </p>
+          <p className="mt-0.5 text-xs text-gray-500">Resets at the start of each month.</p>
           <div className="mt-2 divide-y divide-gray-100">
             {USAGE_LABELS.map(([key, label]) => (
               <UsageRow key={key} label={label} used={usage[key] || 0} limit={limits.limits[key] ?? null} />
@@ -75,36 +86,38 @@ export default async function AccountPage() {
           </div>
         </Card>
 
-        <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold text-gray-900">Team</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-400">
-                  <th className="py-2 pr-4 font-medium">Name</th>
-                  <th className="py-2 pr-4 font-medium">Email</th>
-                  <th className="py-2 pr-4 font-medium">Role</th>
-                  <th className="py-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {team.map((m) => (
-                  <tr key={m.id} className="border-b border-gray-100">
-                    <td className="py-2 pr-4 font-medium text-gray-900">{m.name}</td>
-                    <td className="py-2 pr-4 text-gray-500">{m.email}</td>
-                    <td className="py-2 pr-4 capitalize text-gray-600">{m.role}</td>
-                    <td className="py-2">
-                      <span className={`capitalize ${m.status === 'active' ? 'text-emerald-600' : 'text-red-500'}`}>{m.status}</span>
-                    </td>
+        {canManage && (
+          <Card className="p-5">
+            <h2 className="mb-3 text-sm font-semibold text-gray-900">Team</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-400">
+                    <th className="py-2 pr-4 font-medium">Name</th>
+                    <th className="py-2 pr-4 font-medium">Email</th>
+                    <th className="py-2 pr-4 font-medium">Role</th>
+                    <th className="py-2 font-medium">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-4">
-            <TeamManager team={team} canManage={canManage} usersLimit={usersLimit} currentUserId={user.id} />
-          </div>
-        </Card>
+                </thead>
+                <tbody>
+                  {team.map((m) => (
+                    <tr key={m.id} className="border-b border-gray-100">
+                      <td className="py-2 pr-4 font-medium text-gray-900">{m.name}</td>
+                      <td className="py-2 pr-4 text-gray-500">{m.email}</td>
+                      <td className="py-2 pr-4 capitalize text-gray-600">{m.role}</td>
+                      <td className="py-2">
+                        <span className={`capitalize ${m.status === 'active' ? 'text-emerald-600' : 'text-red-500'}`}>{m.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4">
+              <TeamManager team={team} canManage={canManage} usersLimit={usersLimit} currentUserId={user.id} />
+            </div>
+          </Card>
+        )}
       </div>
     </>
   );

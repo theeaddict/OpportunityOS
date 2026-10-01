@@ -12,7 +12,7 @@ export default async function RootLayout({ children }) {
   const user = await getCurrentUser().catch(() => null);
   return (
     <html lang="en">
-      <body className="antialiased min-h-screen">
+      <body className="antialiased min-h-screen" suppressHydrationWarning>
         <AppShell user={user}>{children}</AppShell>
       </body>
     </html>

@@ -6,7 +6,7 @@ import { listProviders, getDiscoveryProvider, normalizeFilters, defaultProvider 
 import { importCandidates } from '@/lib/services/discovery';
 import { audit } from '@/lib/audit';
 import { assertWithinLimit } from '@/lib/accounts/usage';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { enforce } from '@/lib/rate-limit';
 
 export async function GET() {
@@ -39,6 +39,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // runs spend researches + opportunities allowance
     enforce(request, { limit: 30, windowMs: 60 * 60_000, key: 'discover' });
     // Plan caps before any expensive work is enqueued (researches + the
     // opportunity creation that a run performs during analysis).
@@ -96,6 +97,7 @@ export async function POST(request) {
 export async function PUT(request) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // importing candidates creates account-wide businesses
     const body = await readJson(request);
     const candidates = Array.isArray(body.candidates) ? body.candidates : [];
     if (!candidates.length) return Response.json({ ok: false, error: 'No businesses selected' }, { status: 400 });

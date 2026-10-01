@@ -6,7 +6,7 @@ import * as financialRepo from '@/lib/repositories/financial';
 import * as outreachRepo from '@/lib/repositories/outreach';
 import * as businessesRepo from '@/lib/repositories/businesses';
 import { MONEY_MECHANISMS, SCORE_CATEGORIES } from '@/lib/constants';
-import { hasVerifiedContact, isRejectedOpportunity } from '@/lib/services/gating';
+import { hasVerifiedContact, isRejectedOpportunity, runQualityChecks } from '@/lib/services/gating';
 import { ScenarioEditor } from '@/components/OpportunityPanels';
 import OutreachEngine from '@/components/OutreachEngine';
 import DemoConcept from '@/components/DemoConcept';
@@ -136,6 +136,7 @@ export default async function OpportunityDetailPage({ params }) {
       : !hasVerifiedContactOnBusiness
         ? 'Add a verified public contact on the business before generating a demo.'
         : null;
+  const qc = runQualityChecks({ opportunity, business, evidenceRows: evidence, contacts, messages });
 
   return (
     <>
@@ -629,6 +630,27 @@ export default async function OpportunityDetailPage({ params }) {
               WhatsApp number is published/confirmed — safe to use for WhatsApp outreach.
             </p>
           )}
+        </Section>
+
+        <Section
+          n={13}
+          title="Quality control"
+          intro="A final, explicit checklist before treating this as outreach-ready — most of these are already enforced elsewhere; this makes them visible rather than trusting an opaque score."
+        >
+          <div className={`rounded-lg px-3 py-2 text-sm font-medium ${qc.passed ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+            {qc.passed ? 'All checks passed.' : `${qc.checks.filter((c) => !c.pass).length} check(s) need attention.`}
+          </div>
+          <ul className="space-y-1.5">
+            {qc.checks.map((c) => (
+              <li key={c.key} className="flex items-start gap-2 text-sm">
+                <span className={`mt-0.5 shrink-0 ${c.pass ? 'text-emerald-600' : 'text-amber-600'}`}>{c.pass ? '✔' : '⚠'}</span>
+                <span>
+                  <span className="text-gray-800">{c.label}</span>
+                  <span className="ml-1.5 text-xs text-gray-400">— {c.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
         </Section>
       </div>
     </>

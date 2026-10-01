@@ -1,11 +1,12 @@
 import { interpretResearch } from '@/lib/services/analysis';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError } from '@/lib/api-helpers';
 import { enforce } from '@/lib/rate-limit';
 
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // AI interpretation spends the account's analysis allowance
     enforce(request, { limit: 60, windowMs: 60 * 60_000, key: 'interpret' });
     const { id } = await params;
     const result = await interpretResearch(user.account_id, Number(id), user.id);

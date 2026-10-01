@@ -85,10 +85,10 @@ export default function AuthForm({ mode }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       {mode === 'register' && (
-        <Field label="Your name" name="name" required />
+        <Field label="Your name" name="name" required autoComplete="name" />
       )}
-      <Field label="Email" name="email" type="email" required />
-      <Field label="Password" name="password" type="password" required hint={mode === 'register' ? '8-200 chars with uppercase, lowercase, digit and special char' : undefined} />
+      <Field label="Email" name="email" type="email" required autoComplete="username" />
+      <Field label="Password" name="password" type="password" required autoComplete={mode === 'register' ? 'new-password' : 'current-password'} hint={mode === 'register' ? '8-200 chars with uppercase, lowercase, digit and special char' : undefined} />
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       <button
         type="submit"

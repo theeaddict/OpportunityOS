@@ -19,14 +19,18 @@ app/                        Next.js App Router (JavaScript only, no src/)
   discover                  Business Discovery — one-click “Find opportunities” form with
                             live 8-stage progress and a summary + ranked results
   businesses/[id]           Business profile + Research + Evidence + Opportunities
-  opportunities/[id]        Opportunity detail (12 sections): Business context,
+  opportunities/[id]        Opportunity detail (13 sections): Business context,
                             Opportunity score + re-analyze, Problem, Evidence with
                             source/URL/claim type/confidence, Why it matters, Money
                             opportunity with editable assumptions/scenarios, Recommended
                             solution + alternatives, Uncertainties, Outreach (3-variant
                             engine with lifecycle), Demo (Concept Demo Generator
                             with 8 industry templates, sample data, data structures),
-                            Pipeline (events + status moves), Contact (verification).
+                            Pipeline (events + status moves), Contact (verification),
+                            Quality control (explicit pass/fail checklist — evidence
+                            exists, at least one FACT not just inference, every claim
+                            sourced, contact verified, WhatsApp never guessed, solution
+                            within capability, outreach names the business).
                             Provenance Legend (fact/inference/hypothesis/assumption/
                             estimate/impact) displayed at top.
   pipeline                  Opportunity Pipeline — 11-stage Kanban + List view +
@@ -145,7 +149,12 @@ instrumentation.js      Boots the background job worker once per server process
         contact-provider.js ContactProvider: normalization + WhatsApp/phone rules
     research/
       index.js              getResearchProvider() registry (website|http|manual)
-      website-provider.js   Fetches the business's own public site politely
+      website-provider.js   Fetches the business's own public site politely (homepage +
+                            up to 9 linked secondary pages across 11 page-type pools)
+      website-finder.js     Optional: looks up a missing website via Google's official
+                            Programmable Search Engine before research gives up on a
+                            business (self-corrected — a wrong guess just yields no
+                            evidence on the next real fetch, never a hard error)
       polite-fetcher.js     robots.txt parser + rate-limited fetcher + htmlToText
       coverage.js           13-aspect coverage model (what is / isn't covered)
       run.js                runAutomatedResearch(): findings -> evidence + coverage
@@ -212,6 +221,27 @@ scripts/
    and never invents the rest. `website` provider politely fetches the business's own
    public site (robots.txt + rate limits); findings become `business_evidence` rows with
    source/url/type/confidence. Maturity signals are derived **only** from evidence.
+   Discovery providers (`google_places`, `osm_overpass`) also contribute evidence at
+   import time: a confirmed-active listing (has reviews or a published phone/OSM tag)
+   with genuinely no website on file becomes `no_public_website` (`INFERENCE`, 0.55–0.7
+   confidence) — a business with zero online presence is itself a strong, honest signal,
+   not silence. Without this, such businesses produced no evidence at all and were
+   invisible to the pipeline (rejected as too-weak-evidence) despite being some of the
+   clearest opportunities. `no_public_website` counts toward the "Online sales" coverage
+   aspect and alone is enough to propose a `poor_conversion` opportunity (see Analyze).
+   Google Places' `reviews` field (up to 5, `evidence_type: 'customer_review'`) is also
+   scanned for the same signal vocabulary the website crawler uses — real evidence for
+   businesses with no website at all. A single reviewer's complaint is real but weaker
+   than the business's own published content, so it's always `INFERENCE` at 0.45–0.5
+   confidence; pain signals (`unanswered_enquiries`, `no_online_ordering`, …) only match
+   reviews rated ≤3 stars so a phrase in a glowing review can't misread as a complaint.
+   When no provider supplied a website at all, `website-finder.js` (optional, needs
+   `GOOGLE_CUSTOM_SEARCH_API_KEY`/`_CX`) looks one up via Google's official Programmable
+   Search Engine — never by scraping search result pages, which would violate Google's
+   ToS — and only ever fills an empty `businesses.website` (never overwrites a
+   provider-confirmed one); the match is recorded as an unconfirmed `INFERENCE` and the
+   website crawler then fetches it for real content on the very next step, so a wrong
+   guess just yields no evidence rather than corrupting anything.
  3. **Analyze** — the rules analyzer maps evidence-backed signals to problem types
     (`lost_sales`, `manual_booking`, …). Each proposed opportunity stores the problem,
     why-it-matters, a **money mechanism** (`money_mechanism_key` — e.g.
@@ -315,6 +345,39 @@ The audit log reads the append-only `audit_logs` table written by
 …) attributed to `admin_user_id` (with `account_id` set), and the UI's reported
 counts match the table exactly (asserted by e2e PDFMSE17–28).
 
+### Billing (Stripe)
+
+Real payment collection on top of the subscription-ready `billing_plans` /
+`accounts.plan_code` structures (migration `033_stripe_billing.sql`,
+`lib/billing/stripe.js`). Deliberately raw `fetch` + form-encoding, no `stripe`
+SDK dependency — mirrors `lib/ai/client.js` and the discovery providers: a
+thin, inspectable REST wrapper, feature-detected via `STRIPE_SECRET_KEY` so the
+app degrades to a clear "not configured" error (never a fabricated purchase)
+until an operator connects a real Stripe account.
+
+- An operator sets a plan's Stripe **Price** id in the admin Plans page
+  (`billing_plans.stripe_price_id`) — a plan with none stays un-purchasable.
+- `POST /api/billing/checkout` (account **OWNER**-only) creates a Checkout
+  Session; account id + target plan code travel in `metadata` on both the
+  session and `subscription_data.metadata` (Stripe copies the latter onto the
+  resulting subscription), so every later webhook event is self-contained —
+  no `customer_id → account_id` lookup table needed.
+- `POST /api/billing/webhook` is the **only** writer of `plan_code` from a
+  billing event. Auth is the raw-body HMAC signature (`Stripe-Signature`,
+  verified against `STRIPE_WEBHOOK_SECRET`) — never a session, so it carries no
+  cookie and is explicitly exempted in `proxy.js` alongside the ingest webhook.
+  Handles `checkout.session.completed` (activate the plan, store
+  `stripe_customer_id`/`stripe_subscription_id`) and
+  `customer.subscription.deleted` (revert to `free`).
+- `POST /api/billing/portal` hands the OWNER a Stripe Billing Portal link to
+  manage or cancel their own subscription.
+- Tested end-to-end against `scripts/mock-stripe.mjs` (real Stripe API request
+  shapes; `/ctl/*` endpoints simulate a completed checkout or a cancelled
+  subscription by firing a correctly-signed webhook at the app) —
+  `test/billing.test.mjs`, PDFMSBILL01–04: not-purchasable plan refused,
+  OWNER-only gate, the full checkout→webhook→plan_code→cancellation loop, and
+  invalid-signature rejection.
+
 ## 3. Environment variables
 
 | Variable | Required | Purpose |
@@ -322,11 +385,14 @@ counts match the table exactly (asserted by e2e PDFMSE17–28).
 | `DATABASE_URL` | yes | `mysql://user:pass@host:3306/opportunityos` |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | alt | Individual vars (used if `DATABASE_URL` absent) |
 | `APP_URL` | no | Base URL used in generated links |
-| `SESSION_SECRET` | dev | HMAC key for signed session cookies |
+| `SESSION_SECRET` | no | Reserved for future session signing — NOT read by any current code (sessions are DB-backed with signed cookie pair values); no longer present in `.env.example` |
 | `AI_API_KEY` / `AI_MODEL` | no | Optional AI engine (OpenAI-compatible); app fully functional without |
 | `AI_BASE_URL` | no | Override AI endpoint (default `https://api.openai.com/v1`) |
 | `RESEARCH_PROVIDER` | no | `website` (default) · `http` · `manual` |
 | `RESEARCH_API_URL` | no | Operator endpoint used when `RESEARCH_PROVIDER=http` |
+| `STRIPE_SECRET_KEY` | no | Enables real billing (Checkout + Portal); absent = clear "not configured" errors, no upgrade UI |
+| `STRIPE_WEBHOOK_SECRET` | no | Required for `/api/billing/webhook` to accept events |
+| `STRIPE_API_BASE_URL` | no | Override Stripe API endpoint (tests point this at `scripts/mock-stripe.mjs`) |
 
 ## 4. Development plan (implemented in order)
 

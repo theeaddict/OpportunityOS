@@ -5,11 +5,25 @@ const { Client } = require('pg');
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'db', 'migrations');
 
+// Same precedence as lib/db.js: PG_DATABASE_URL first; DATABASE_URL is the
+// MariaDB fallback URL (see .env.example) and is only a valid Postgres target
+// when it's actually a postgres:// URL. Without this, a fresh checkout of
+// this repo's own .env.example (DATABASE_URL=mysql://…, PG_DATABASE_URL=
+// postgres://…) makes this script try to speak Postgres to the MariaDB port.
+function resolvePgUrl() {
+  if (process.env.PG_DATABASE_URL) return process.env.PG_DATABASE_URL;
+  if (process.env.DATABASE_URL && /^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL)) {
+    return process.env.DATABASE_URL;
+  }
+  return null;
+}
+
 function configFromEnv() {
-  if (process.env.DATABASE_URL) return { connectionString: process.env.DATABASE_URL };
+  const url = resolvePgUrl();
+  if (url) return { connectionString: url };
   const { DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME } = process.env;
   if (!DB_USER || !DB_NAME) {
-    console.error('Missing DATABASE_URL or DB_* variables. See .env.example');
+    console.error('Missing PG_DATABASE_URL/DATABASE_URL or DB_* variables. See .env.example');
     process.exit(1);
   }
   return {
@@ -23,8 +37,8 @@ function configFromEnv() {
 
 async function ensureDatabase(cfg) {
   // Create the database itself if missing (needs a connection to a maintenance DB).
-  const dbName = cfg.database
-    || (process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '') : null);
+  const url = resolvePgUrl();
+  const dbName = cfg.database || (url ? new URL(url).pathname.replace(/^\//, '') : null);
   if (!dbName) throw new Error('No database name configured');
 
   const bare = { ...cfg };
@@ -32,8 +46,8 @@ async function ensureDatabase(cfg) {
   delete bare.connectionString;
 
   let maint = { host: 'localhost', port: 5432, user: 'root', password: '' };
-  if (process.env.DATABASE_URL) {
-    const u = new URL(process.env.DATABASE_URL);
+  if (url) {
+    const u = new URL(url);
     maint = {
       host: u.hostname || 'localhost',
       port: Number(u.port || 5432),

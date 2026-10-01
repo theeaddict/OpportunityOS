@@ -18,14 +18,21 @@ function hashPassword(password) {
 
 async function main() {
   const email = String(process.argv[2] || '').trim().toLowerCase();
-  const password = process.argv[3] || process.env.SEED_ADMIN_PASSWORD || 'opportunityos';
-  if (!email) {
-    console.error('Usage: node scripts/grant-admin.js <email> [password]');
+  // No published-default fallback: the operator must supply a password, so a
+  // grant can never reintroduce known credentials (default-password finding).
+  const password = process.argv[3] || process.env.SEED_ADMIN_PASSWORD;
+  if (!email || !password) {
+    console.error('Usage: node scripts/grant-admin.js <email> <password>');
+    console.error('  (or set SEED_ADMIN_PASSWORD instead of passing the password as an argument)');
     process.exit(1);
   }
 
-  const conn = process.env.DATABASE_URL
-    ? new Client({ connectionString: process.env.DATABASE_URL })
+  // Same precedence as lib/db.js: PG_DATABASE_URL first; DATABASE_URL is only
+  // a valid Postgres target when it's actually a postgres:// URL.
+  const pgUrl = process.env.PG_DATABASE_URL
+    || (process.env.DATABASE_URL && /^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL) ? process.env.DATABASE_URL : null);
+  const conn = pgUrl
+    ? new Client({ connectionString: pgUrl })
     : new Client({
         host: process.env.DB_HOST || 'localhost',
         port: Number(process.env.DB_PORT || 5432),

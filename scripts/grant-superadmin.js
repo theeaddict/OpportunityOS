@@ -23,8 +23,10 @@ async function main() {
     process.exit(1);
   }
 
-  const conn = process.env.DATABASE_URL
-    ? new Client({ connectionString: process.env.DATABASE_URL })
+  const pgUrl = process.env.PG_DATABASE_URL
+    || (process.env.DATABASE_URL && /^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL) ? process.env.DATABASE_URL : null);
+  const conn = pgUrl
+    ? new Client({ connectionString: pgUrl })
     : new Client({
         host: process.env.DB_HOST || 'localhost',
         port: Number(process.env.DB_PORT || 5432),

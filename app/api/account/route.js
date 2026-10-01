@@ -10,10 +10,14 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const user = await requireAccount();
+    const canManage = isAtLeast(user, 'admin');
     const [usage, limits, team] = await Promise.all([
       getUsage(user.account_id),
       getAccountLimits(user.account_id),
-      accountsRepo.listUsers(user.account_id),
+      // The full roster (names + emails) is a management view — members get an
+      // empty array here and a hidden team UI, so the API never leaks who is
+      // on the workspace to non-admins.
+      canManage ? accountsRepo.listUsers(user.account_id) : Promise.resolve([]),
     ]);
     return jsonOk({
       user,
@@ -23,7 +27,7 @@ export async function GET() {
       status: limits.status,
       limits: limits.limits,
       team,
-      canManage: isAtLeast(user, 'admin'),
+      canManage,
     });
   } catch (err) {
     return handleRouteError(err);

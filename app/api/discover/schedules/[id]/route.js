@@ -1,7 +1,7 @@
 import * as schedulesRepo from '@/lib/repositories/discover-schedules';
 import { parseJson } from '@/lib/db';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 
 function serialized(row) {
   if (!row) return null;
@@ -23,6 +23,7 @@ export async function GET(_request, { params }) {
 export async function PATCH(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // watch edits drive recurring discovery runs
     const { id } = await params;
     const body = await readJson(request);
     const schedule = await schedulesRepo.updateSchedule(user.account_id, id, body);
@@ -36,6 +37,7 @@ export async function PATCH(request, { params }) {
 export async function DELETE(_request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // deleting a watch stops its scheduled runs
     const { id } = await params;
     const existing = await schedulesRepo.findSchedule(user.account_id, id);
     if (!existing) return Response.json({ ok: false, error: 'Watch not found' }, { status: 404 });

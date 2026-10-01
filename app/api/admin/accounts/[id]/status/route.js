@@ -1,5 +1,6 @@
 import { requireSuperadmin, HttpError, handleRouteError, jsonOk, readJson } from '@/lib/api-helpers';
 import { getAccount, updateAccount } from '@/lib/repositories/accounts';
+import { destroySessionsForAccount } from '@/lib/auth';
 import { audit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,9 @@ export async function POST(request, { params }) {
     if (status === account.status) return jsonOk({ id: accountId, status });
 
     await updateAccount(accountId, { status });
+    // Suspension must be immediate: drop every tenant session belonging to the
+    // account so a suspended workspace can't keep operating through saved cookies.
+    if (status === 'suspended') await destroySessionsForAccount(accountId);
     await audit(status === 'suspended' ? 'admin.account_suspended' : 'admin.account_reactivated', {
       entity_type: 'account',
       entity_id: accountId,

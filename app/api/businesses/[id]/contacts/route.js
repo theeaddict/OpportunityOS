@@ -1,6 +1,6 @@
 import * as businessesRepo from '@/lib/repositories/businesses';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 
 // Contacts: /api/businesses/[id]/contacts
 export async function GET(request, { params }) {
@@ -16,6 +16,7 @@ export async function GET(request, { params }) {
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // contacts are account-wide data — OWNER/ADMIN only
     const { id } = await params;
     const businessId = Number(id);
     const business = await businessesRepo.findBusiness(user.account_id, businessId);
@@ -66,6 +67,7 @@ export async function POST(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // deleting a contact affects account-wide records
     const { id } = await params;
     const contactId = Number(new URL(request.url).searchParams.get('contact_id'));
     if (!contactId) return Response.json({ ok: false, error: 'contact_id required' }, { status: 400 });

@@ -24,7 +24,7 @@ cp .env.example .env      # then edit credentials
 #   e.g. with Docker:
 docker run -d --name oos-mariadb -e MARIADB_ROOT_PASSWORD=root \
   -e MARIADB_DATABASE=opportunityos -p 127.0.0.1:3307:3306 mariadb:10.11
-#   DATABASE_URL=mysql://root:root@127.0.0.1:3307/opportunityos
+#   DATABASE_URL=mysql://root:CHANGE_ME@127.0.0.1:3307/opportunityos
 
 # 3. Apply migrations + seed (solution library, demo data, admin user)
 node scripts/setup-db.js
@@ -58,6 +58,22 @@ size. The opportunity engine uses this profile: only **enabled** solutions are
 ever recommended, and an opportunity whose problem no enabled solution can serve
 is marked **NOT_A_SERVICE_FIT** (probability 0, nothing recommended, reason
 recorded). Preferences only nudge fit scores — they never hard-block.
+
+**Password reset & email verification** — "Forgot password?" on the sign-in page
+emails a one-hour, single-use link (`/api/auth/forgot-password` always answers
+identically, so it can't be used to discover who has an account; a reset signs
+every other session out). New sign-ups get a verification link; set
+`REQUIRE_EMAIL_VERIFICATION=1` to block API use until it's clicked. Email is plain
+SMTP (`SMTP_*` in `.env.example`); only a SHA-256 hash of each token is stored.
+Apply migration 034 with `node scripts/migrate.js`.
+
+**Starter solution library** — every new workspace is seeded with ~15 editable
+small-business solution templates (`lib/solutions/starter-catalog.js`), because an
+empty library scores 0 on *solution fit* (15% of the score) for every opportunity.
+They are labelled as templates with starting price estimates, never quotations.
+Existing workspaces get them with **Solution library → Load starter solutions**
+(`POST /api/solutions/starter`, idempotent: it never overwrites or duplicates
+anything you created or edited).
 
 Discovery is job-based and duplicate-protected. Every long-running piece of work —
 discovery runs, automated/AI research, opportunity analysis, financial scenarios,
@@ -235,13 +251,14 @@ Safety contract (enforced structurally by schemas + repositories):
 - invalid structured output ⇒ exactly one repair attempt, then the job is marked failed
 - without a key nothing is faked: jobs are recorded `skipped_no_provider`
 
-Test suites:
-- `GET /api/system/self-test` — repository tests (41 assertions: normalization incl.
+Test suites (platform-operator only — these need a platform-admin session from
+`/admin/login` AND a workspace-admin session; an ordinary workspace admin gets 403):
+- `POST /api/system/self-test` — repository tests (41 assertions: normalization incl.
   social handles, dedup, contact verification rules, WhatsApp rules, scoring engine
   math (weighted totals, per-dimension sub-scores, category classification + configurable
   thresholds, follower-cap), matching, assumptions/scenarios, pipeline, outreach
   approval, job lifecycle + duplicate protection, robots.txt parser, constants integrity)
-- `GET /api/system/ai-test` — 5 offline schema-contract tests + 5 live agent tests on a
+- `POST /api/system/ai-test` — 5 offline schema-contract tests + 5 live agent tests on a
   controlled `[DEMO]` sample business (live tests only run when a provider is set)
 
 Application code owns: database, validation, scoring formulas, financial

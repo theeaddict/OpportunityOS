@@ -1,4 +1,4 @@
-import { requireUser } from '@/lib/api-helpers';
+import { requireUser, requireSuperadmin } from '@/lib/api-helpers';
 import { isAtLeast } from '@/lib/accounts/roles';
 import * as businessesRepo from '@/lib/repositories/businesses';
 import * as evidenceRepo from '@/lib/repositories/evidence';
@@ -20,9 +20,14 @@ export const dynamic = 'force-dynamic';
 /**
  * Repository self-test. Admin-only; exercises every required repository
  * function against the live database with throwaway records and cleans up.
- * Run: curl -b session http://localhost:3000/api/system/self-test | jq
+ * Run: curl -b session -X POST http://localhost:3000/api/system/self-test | jq
  */
-export async function GET() {
+export async function POST() {
+  // Platform-operator tool: it creates/deletes accounts and users, so a
+  // workspace admin (which every self-serve signup is) must not reach it. It
+  // needs BOTH a platform-admin session and a workspace session to run against.
+  const platformAdmin = await requireSuperadmin().catch(() => null);
+  if (!platformAdmin) return Response.json({ ok: false, error: 'Platform administrator sign-in required' }, { status: 403 });
   const user = await requireUser().catch(() => null);
   if (!user) return Response.json({ ok: false, error: 'Not signed in' }, { status: 401 });
   if (!isAtLeast(user, 'admin')) return Response.json({ ok: false, error: 'Admin only' }, { status: 403 });
@@ -591,8 +596,7 @@ function sumDefault([ev, pr, mo, sf, ma, ap, cx, ca]) {
     if (running.attempts < 1) throw new Error('attempts not incremented');
     await jobsRepo.setProgress(ACCOUNT, jid, 75);
     await jobsRepo.completeJob(ACCOUNT, jid);
-    const jobs = await jobsRepo.listJobs(ACCOUNT, 5);
-    const job = jobs.find((j) => j.id === jid);
+    const job = await jobsRepo.getJob(ACCOUNT, jid);
     if (!job || job.status !== 'completed' || job.progress !== 100) throw new Error(JSON.stringify(job));
     return `job ${jid} completed; duplicate protection works`;
   });
@@ -782,6 +786,14 @@ function sumDefault([ev, pr, mo, sf, ma, ap, cx, ca]) {
   }
   if (createdIds.solutionCrud) {
     await solutionsRepo.deleteSolution(ACCOUNT, createdIds.solutionCrud).catch((e) =>
+      results.push({ name: 'cleanup', pass: false, detail: String(e.message || e) })
+    );
+  }
+  if (createdIds.searchQuery) {
+    // The search query (and its search_jobs, ON DELETE CASCADE) are throwaway
+    // test fixtures from the jobs-lifecycle + failJob tests.
+    const { query } = await import('@/lib/db');
+    await query('DELETE FROM search_queries WHERE id = ?', [createdIds.searchQuery]).catch((e) =>
       results.push({ name: 'cleanup', pass: false, detail: String(e.message || e) })
     );
   }

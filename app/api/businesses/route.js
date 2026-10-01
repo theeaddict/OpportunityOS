@@ -1,6 +1,6 @@
 import * as businessesRepo from '@/lib/repositories/businesses';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { isNonEmptyString, optionalString } from '@/lib/validation';
 
 export async function GET(request) {
@@ -16,12 +16,15 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const user = await requireAccount();
+    // Creating a business writes account-wide data — OWNER/ADMIN only.
+    requireRole(user, 'admin');
     const body = await readJson(request);
     if (!isNonEmptyString(body.name, 200)) {
       return Response.json({ ok: false, error: 'Business name required' }, { status: 400 });
     }
 
     // Dedup: normalized name / website / phone.
+    const socialUrl = optionalString(body.socialUrl, 500);
     const { businessId, created } = await businessesRepo.findOrCreateBusiness(user.account_id, {
       name: body.name.trim(),
       industry: optionalString(body.industry, 120),
@@ -30,6 +33,8 @@ export async function POST(request) {
       country: optionalString(body.country, 120),
       website: optionalString(body.website, 500),
       phone: optionalString(body.phone, 40),
+      socialUrl: socialUrl || null,
+      primary_social_platform: optionalString(body.platform, 40),
       data_origin: 'manual',
       created_by: user.id,
     });
@@ -39,9 +44,15 @@ export async function POST(request) {
         business_id: businessId,
         source_type: 'manual_entry',
         source_name: `Manual entry by ${user.name}`,
-        source_url: null,
+        source_url: socialUrl || null,
         external_identifier: null,
       });
+      if (socialUrl) {
+        await businessesRepo.addContact({
+          account_id: user.account_id, business_id: businessId,
+          contact_type: 'social', contact_value: socialUrl,
+        }).catch(() => {}); // best-effort — a malformed URL shouldn't sink business creation
+      }
     }
     await audit(created ? 'business.created' : 'business.duplicate', {
       entity_type: 'businesses', entity_id: businessId,

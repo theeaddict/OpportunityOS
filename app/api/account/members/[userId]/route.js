@@ -1,5 +1,6 @@
 import { requireAccount, requireRole, HttpError, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import * as accountsRepo from '@/lib/repositories/accounts';
+import { destroyAllSessionsForUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,8 @@ export async function PATCH(request, { params }) {
       if (user.id === uid) throw new HttpError(403, 'You cannot suspend your own account');
       if (member.role === 'owner' && body.status !== 'active') throw new HttpError(403, 'Cannot suspend the workspace owner');
       await accountsRepo.setUserStatus(uid, body.status);
+      // A suspended member must lose access immediately — kill their sessions.
+      if (body.status === 'suspended') await destroyAllSessionsForUser(uid);
     }
 
     return jsonOk({ id: uid });

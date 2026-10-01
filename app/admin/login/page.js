@@ -23,9 +23,6 @@ export default async function AdminLoginPage() {
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <AdminLoginForm />
         </div>
-        <p className="mt-4 text-center text-xs text-gray-400">
-          Default seeded admin: admin@example.com / opportunityos
-        </p>
       </div>
     </div>
   );

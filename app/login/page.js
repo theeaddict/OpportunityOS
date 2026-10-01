@@ -14,9 +14,11 @@ export default async function LoginPage() {
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <AuthForm mode="login" />
           <p className="mt-4 text-center text-xs text-gray-500">
+            <Link href="/forgot-password" className="font-medium text-blue-600 hover:underline">Forgot password?</Link>
+          </p>
+          <p className="mt-2 text-center text-xs text-gray-500">
             No account? <Link href="/register" className="font-medium text-blue-600 hover:underline">Register</Link>
           </p>
-          <p className="mt-2 text-center text-xs text-gray-400">Default seeded login: admin@example.com / opportunityos</p>
         </div>
       </div>
     </div>

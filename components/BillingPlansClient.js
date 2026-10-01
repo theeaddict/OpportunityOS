@@ -18,6 +18,7 @@ const BLANK = () => ({
   description: '',
   price_cents: '',
   currency: 'USD',
+  stripe_price_id: '',
   limit_researches: '',
   limit_opportunities: '',
   limit_ai_analyses: '',
@@ -75,6 +76,7 @@ export default function BillingPlansClient() {
       else if (k === 'name') payload.name = String(v).trim();
       else if (k === 'description') payload.description = String(v).trim();
       else if (k === 'currency') payload.currency = String(v).trim();
+      else if (k === 'stripe_price_id') payload.stripe_price_id = String(v).trim() || null;
       else if (LIMIT_FIELDS.some((f) => f.key === k)) payload[k] = v === '' ? null : Number(v);
       else if (k === 'is_active') payload.is_active = v === 'on';
     }
@@ -98,6 +100,7 @@ export default function BillingPlansClient() {
       if (k === 'name') payload.name = String(v).trim();
       else if (k === 'description') payload.description = String(v).trim();
       else if (k === 'currency') payload.currency = String(v).trim();
+      else if (k === 'stripe_price_id') payload.stripe_price_id = String(v).trim() || null;
       else if (LIMIT_FIELDS.some((f) => f.key === k)) payload[k] = v === '' ? null : Number(v);
       else if (k === 'is_active') payload.is_active = v === 'on';
     }
@@ -280,9 +283,20 @@ function PlanForm({ plan = BLANK(), blank = false, onCancel, onSubmit, saving })
           <input name="currency" defaultValue={plan.currency || 'USD'} maxLength={3} className={inputCls} />
         </Label>
       </div>
-      <Label label="Description" wide>
-        <input name="description" defaultValue={plan.description || ''} maxLength={300} className={inputCls} />
-      </Label>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Label label="Description">
+          <input name="description" defaultValue={plan.description || ''} maxLength={300} className={inputCls} />
+        </Label>
+        <Label label="Stripe price ID">
+          <input
+            name="stripe_price_id"
+            defaultValue={plan.stripe_price_id || ''}
+            maxLength={120}
+            placeholder="price_… (leave blank to keep this plan un-purchasable)"
+            className={inputCls}
+          />
+        </Label>
+      </div>
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
         {LIMIT_FIELDS.map((f) => (
           <Label key={f.key} label={f.label}>

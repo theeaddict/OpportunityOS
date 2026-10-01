@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import * as businessesRepo from '@/lib/repositories/businesses';
 import { PageHeader, Card, EmptyState } from '@/components/ui';
 import AddBusinessForm from '@/components/AddBusinessForm';
+import SocialLeadForm from '@/components/SocialLeadForm';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +26,10 @@ export default async function BusinessesPage({ searchParams }) {
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm shadow-sm focus:border-blue-500 focus:outline-none"
           />
         </form>
-        <AddBusinessForm />
+        <div className="flex flex-wrap items-start gap-2">
+          <AddBusinessForm />
+          <SocialLeadForm />
+        </div>
       </div>
 
       {businesses.length ? (

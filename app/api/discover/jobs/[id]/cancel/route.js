@@ -1,6 +1,6 @@
 import { requestCancel } from '@/lib/jobs/queue';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError } from '@/lib/api-helpers';
 
 /**
  * Cancel a discovery job where safe. Queued jobs cancel immediately; running
@@ -10,6 +10,7 @@ import { requireAccount, jsonOk, handleRouteError } from '@/lib/api-helpers';
 export async function POST(request, { params }) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // cancelling a discovery job affects the shared queue
     const { id } = await params;
     const outcome = await requestCancel(Number(id), user.account_id);
     await audit('job.cancel_requested', {

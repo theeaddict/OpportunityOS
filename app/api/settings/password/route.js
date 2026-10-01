@@ -1,6 +1,6 @@
 import * as usersRepo from '@/lib/repositories/users';
 import { requireAccount, jsonOk, HttpError, handleRouteError, readJson } from '@/lib/api-helpers';
-import { hashPassword, verifyPasswordCredential } from '@/lib/auth';
+import { hashPassword, verifyPasswordCredential, getSessionToken, destroyOtherSessions } from '@/lib/auth';
 import { passwordPolicyError, isNonEmptyString } from '@/lib/validation';
 import { audit } from '@/lib/audit';
 import { enforce } from '@/lib/rate-limit';
@@ -33,6 +33,10 @@ export async function PATCH(request) {
     if (!verified) throw new HttpError(400, 'Current password is incorrect');
 
     await usersRepo.updatePassword(user.id, hashPassword(newPassword));
+    // Revoke every OTHER session for this user — the cookie this request came
+    // in on stays valid, but a password known to the account owner must not
+    // keep any older sessions alive.
+    await destroyOtherSessions(user.id, await getSessionToken());
     await audit('user.password_changed', { entity_type: 'user', entity_id: user.id });
     return jsonOk({ ok: true });
   } catch (err) {

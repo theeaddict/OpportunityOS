@@ -1,6 +1,7 @@
 import { getSettingsSummary } from '@/lib/repositories/settings';
 import * as usersRepo from '@/lib/repositories/users';
 import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { isAtLeast } from '@/lib/accounts/roles';
 import { isNonEmptyString } from '@/lib/validation';
 
 export async function GET() {
@@ -10,6 +11,11 @@ export async function GET() {
       getSettingsSummary(user.account_id),
       usersRepo.getTwoFactorStatus(user.id),
     ]);
+    // Score thresholds are scoring-configuration, not member-facing — members
+    // get the shared ai/discovery info but not the tuning numbers.
+    if (!isAtLeast(user, 'admin')) {
+      delete summary.score_thresholds;
+    }
     return jsonOk({ ...summary, two_factor_enabled: twoFactorEnabled, user });
   } catch (err) {
     return handleRouteError(err);

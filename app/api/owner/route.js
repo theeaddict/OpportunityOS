@@ -7,7 +7,7 @@ import {
   statusMessage, progressLabel, ownerResultItem, ownerMessage,
 } from '@/lib/owner/language.js';
 import { audit } from '@/lib/audit';
-import { requireAccount, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
+import { requireAccount, requireRole, jsonOk, handleRouteError, readJson } from '@/lib/api-helpers';
 import { assertWithinLimit } from '@/lib/accounts/usage';
 import { defaultProvider } from '@/lib/services/discovery';
 
@@ -48,6 +48,7 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const user = await requireAccount();
+    requireRole(user, 'admin'); // owner runs enqueue scans that spend plan allowance
     const body = await readJson(request);
     if (body.onboard) {
       const raw = {

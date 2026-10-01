@@ -21,9 +21,11 @@ const STAGE_LABEL = {
   ranking: 'Ranking opportunities',
 };
 
-function parseSummary(raw) {
-  if (!raw) return null;
-  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
+/** "What we looked at" label, derived from the job's own filters — no join needed. */
+function jobLabel(payload) {
+  const f = parseJson(payload, {})?.filters || {};
+  const place = f.location || (f.bbox ? 'a picked map area' : null);
+  return f.query || [f.industry, place].filter(Boolean).join(' in ') || 'Discovery run';
 }
 
 export default async function DiscoverPage() {
@@ -53,10 +55,10 @@ export default async function DiscoverPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {jobs.map((j) => {
-                const s = parseSummary(j.result_summary);
+                const s = parseJson(j.result, null);
                 return (
                   <tr key={j.id}>
-                    <td className="max-w-xs truncate px-4 py-2.5">{j.query_name}</td>
+                    <td className="max-w-xs truncate px-4 py-2.5">{jobLabel(j.payload)}</td>
                     <td className="px-4 py-2.5">
                       <span className={j.status === 'completed' ? 'text-emerald-700' : j.status === 'failed' ? 'text-red-600' : 'text-blue-700'}>{j.status}</span>{' '}
                       <span className="text-gray-400">{j.progress}%</span>

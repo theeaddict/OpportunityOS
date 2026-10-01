@@ -43,6 +43,20 @@ export default function SolutionLibraryManager({ solutions = [], problemTypes = 
     router.refresh();
   }
 
+  async function loadStarter() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/solutions/starter', { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) setError(data.error || 'Could not load starter solutions');
+      else router.refresh();
+    } catch {
+      setError('Could not load starter solutions');
+    }
+    setBusy(false);
+  }
+
   return (
     <div>
       {isAdmin && (
@@ -124,7 +138,26 @@ export default function SolutionLibraryManager({ solutions = [], problemTypes = 
         })}
       </div>
       {!solutions.length && (
-        <Card className="p-6 text-center text-sm text-gray-500">Library is empty — add your first solution.</Card>
+        <Card className="p-6 text-center text-sm text-gray-500">
+          <p className="font-medium text-gray-700">Your library is empty.</p>
+          <p className="mt-1">Without solutions to match against, every opportunity scores 0 on solution fit and is held below the strong threshold.</p>
+          {isAdmin ? (
+            <>
+              <button
+                type="button"
+                onClick={loadStarter}
+                disabled={busy}
+                className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {busy ? 'Loading…' : 'Load starter solutions'}
+              </button>
+              <p className="mt-2 text-xs text-gray-400">Adds editable templates for common small-business software. Nothing you have already created is changed.</p>
+              {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+            </>
+          ) : (
+            <p className="mt-2 text-xs">Ask a workspace admin to add solutions.</p>
+          )}
+        </Card>
       )}
     </div>
   );
